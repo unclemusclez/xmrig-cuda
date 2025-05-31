@@ -108,7 +108,7 @@ if (WITH_DRIVER_API AND WIN32)
     endif()
 
     add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${HEAD}" $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>)
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NVRTCDLL}" $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>)
 
     file(GLOB NVRTCBUILTINDLL "${CUDA_TOOLKIT_ROOT_DIR}/bin/nvrtc-builtins64*.dll")
     add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
