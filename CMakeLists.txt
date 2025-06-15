@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
-project(xmrig-cuda LANGUAGES CXX CUDA)
+project(xmrig-rocm LANGUAGES CXX HIP)
+find_package(hip REQUIRED)
+find_package(rocblas REQUIRED)
+find_package(rocrand REQUIRED)
 include(cmake/CUDA-Version.cmake)
 
 
@@ -98,7 +101,8 @@ if (XMRIG_OS_APPLE)
 endif()
 
 add_library(${CMAKE_PROJECT_NAME} SHARED ${SOURCES})
-target_link_libraries(${CMAKE_PROJECT_NAME} xmrig-cu ${LIBS})
+target_link_libraries(${CMAKE_PROJECT_NAME} xmrig-rocm ${LIBS} hip::host roc::rocblas rocrand)
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE __HIP_PLATFORM_AMD__)
 
 if (WITH_DRIVER_API AND WIN32)
     if (CUDA_VERSION VERSION_LESS 10.0)
