@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.5)
-project(xmrig-cuda)
+cmake_minimum_required(VERSION 3.10)
+project(xmrig-cuda LANGUAGES CXX CUDA)
 include(cmake/CUDA-Version.cmake)
 
 
@@ -72,7 +72,7 @@ add_definitions(/DCUB_IGNORE_DEPRECATED_CPP_DIALECT)
 include(cmake/cpu.cmake)
 include(cmake/os.cmake)
 include(cmake/flags.cmake)
-include(cmake/CUDA.cmake)
+# include(cmake/CUDA.cmake) # Removed as we're now using native CUDA support
 
 
 set(SOURCES
