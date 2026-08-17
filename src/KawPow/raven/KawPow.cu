@@ -114,7 +114,7 @@ void kawpow_prepare(nvid_ctx *ctx, const void* cache, size_t cache_size, const v
 
     if (!ctx->kawpow_stop_host) {
         void* temp = nullptr;
-        CUDA_CHECK(ctx->device_id, hipMallocHost(&temp, sizeof(uint32_t) * 2));
+        CUDA_CHECK(ctx->device_id, hipHostMalloc(&temp, sizeof(uint32_t) * 2, hipHostMallocDefault));
         ctx->kawpow_stop_host = static_cast<uint32_t*>(temp);
         {
             void* devPtr = nullptr;
@@ -153,7 +153,7 @@ void hash(nvid_ctx *ctx, uint8_t* job_blob, uint64_t target, uint32_t *rescount,
         args,
         0, nullptr
     ));
-    CU_CHECK(ctx->device_id, hipCtxSynchronize());
+    CU_CHECK(ctx->device_id, hipDeviceSynchronize());
 
     *skipped_hashes = ctx->kawpow_stop_host[1];
 

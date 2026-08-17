@@ -116,7 +116,7 @@ set_source_files_properties(
 )
 
 if (XMRIG_OS_WIN)
-    list(APPEND SOURCES res/app.rc)
+    # list(APPEND SOURCES res/app.rc)
 endif()
 
 if (XMRIG_OS_APPLE)

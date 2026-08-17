@@ -316,9 +316,6 @@ int cryptonight_extra_cpu_init(nvid_ctx *ctx, const xmrig_cuda::Algorithm &algor
 
 #   ifdef XMRIG_ALGO_CN_R
     CU_CHECK(ctx->device_id, hipDeviceGet(&ctx->cuDevice, ctx->device_id));
-
-    hipCtx_t cuContext;
-    CU_CHECK(ctx->device_id, hipDevicePrimaryCtxRetain(&cuContext, ctx->cuDevice));
 #   endif
 
     hipError_t err;
@@ -547,7 +544,7 @@ int cuda_get_deviceinfo(nvid_ctx *ctx)
         return 1;
     }
 
-    ctx->device_name            = strdup(props.name);
+    ctx->device_name            = _strdup(props.name);
     ctx->device_mpcount         = props.multiProcessorCount;
     ctx->device_arch[0]         = props.major;
     ctx->device_arch[1]         = props.minor;
