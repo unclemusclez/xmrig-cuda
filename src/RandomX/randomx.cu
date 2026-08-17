@@ -22,8 +22,8 @@ along with RandomX CUDA.  If not, see<http://www.gnu.org/licenses/>.
 #include "cuda_device.hpp"
 
 
-#include <cuda.h>
-#include <cuda_runtime.h>
+#include <hip/hip_runtime.h>
+#include <hip/hip_runtime.h>
 #include <cstdint>
 
 

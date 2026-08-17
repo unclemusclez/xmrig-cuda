@@ -32,7 +32,7 @@
 #include <map>
 #include <mutex>
 #include <string>
-#include <cuda_runtime_api.h>
+#include <hip/hip_runtime.h>
 
 
 namespace xmrig_cuda {
@@ -50,7 +50,7 @@ public:
 
         if (!m_ptr) {
             m_ptr = const_cast<void *>(dataset);
-            CUDA_CHECK(0, cudaHostRegister(m_ptr, size, cudaHostRegisterPortable | cudaHostRegisterMapped));
+            HIP_CHECK(0, hipHostRegister(m_ptr, size, hipHostRegisterPortable | hipHostRegisterMapped));
         }
 
         ++m_refs;
@@ -66,7 +66,7 @@ public:
         --m_refs;
 
         if (m_refs == 0) {
-            cudaHostUnregister(m_ptr);
+            hipHostUnregister(m_ptr);
         }
         m_ptr = nullptr;
     }
@@ -513,7 +513,7 @@ uint64_t deviceUlong(nvid_ctx *ctx, DeviceProperty property)
 void init()
 {
 #   if defined(XMRIG_ALGO_KAWPOW) || defined(XMRIG_ALGO_CN_R)
-    cuInit(0);
+    hipInit(0);
 #   endif
 }
 
@@ -530,40 +530,40 @@ void release(nvid_ctx *ctx)
 
     // cudaFree, cuModuleUnload, cuCtxDestroy check for nullptr internally
 
-    cudaFree(ctx->d_input);
-    cudaFree(ctx->d_result_count);
-    cudaFree(ctx->d_result_nonce);
-    cudaFree(ctx->d_long_state);
-    cudaFree(ctx->d_ctx_state);
-    cudaFree(ctx->d_ctx_state2);
-    cudaFree(ctx->d_ctx_a);
-    cudaFree(ctx->d_ctx_b);
-    cudaFree(ctx->d_ctx_key1);
-    cudaFree(ctx->d_ctx_key2);
-    cudaFree(ctx->d_ctx_text);
+    hipFree(ctx->d_input);
+    hipFree(ctx->d_result_count);
+    hipFree(ctx->d_result_nonce);
+    hipFree(ctx->d_long_state);
+    hipFree(ctx->d_ctx_state);
+    hipFree(ctx->d_ctx_state2);
+    hipFree(ctx->d_ctx_a);
+    hipFree(ctx->d_ctx_b);
+    hipFree(ctx->d_ctx_key1);
+    hipFree(ctx->d_ctx_key2);
+    hipFree(ctx->d_ctx_text);
 
     if (ctx->rx_dataset_host > 0) {
         datasetHost.release();
     }
     else {
-        cudaFree(ctx->d_rx_dataset);
+        hipFree(ctx->d_rx_dataset);
     }
 
-    cudaFree(ctx->d_rx_hashes);
-    cudaFree(ctx->d_rx_entropy);
-    cudaFree(ctx->d_rx_vm_states);
-    cudaFree(ctx->d_rx_rounding);
+    hipFree(ctx->d_rx_hashes);
+    hipFree(ctx->d_rx_entropy);
+    hipFree(ctx->d_rx_vm_states);
+    hipFree(ctx->d_rx_rounding);
 
 #   ifdef WITH_KAWPOW
-    cudaFree(ctx->kawpow_cache);
-    cudaFree(ctx->kawpow_dag);
-    cudaFreeHost(ctx->kawpow_stop_host);
+    hipFree(ctx->kawpow_cache);
+    hipFree(ctx->kawpow_dag);
+    hipHostFree(ctx->kawpow_stop_host);
 
-    cuModuleUnload(ctx->module);
-    cuModuleUnload(ctx->kawpow_module);
+    hipModuleUnload(ctx->module);
+    hipModuleUnload(ctx->kawpow_module);
 
     if (ctx->cuDevice != -1) {
-        cuDevicePrimaryCtxRelease(ctx->cuDevice);
+        hipDevicePrimaryCtxRelease(ctx->cuDevice);
     }
 #   endif
 

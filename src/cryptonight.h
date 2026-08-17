@@ -34,15 +34,15 @@
 
 
 #if defined(XMRIG_ALGO_KAWPOW) || defined(XMRIG_ALGO_CN_R)
-#   include <cuda.h>
+#   include <hip/hip_runtime.h>
 #endif
 
 
 struct nvid_ctx {
 #   ifdef XMRIG_ALGO_CN_R
-    CUdevice cuDevice                   = -1;
-    CUmodule module                     = nullptr;
-    CUfunction kernel                   = nullptr;
+     hipDevice_t cuDevice                 = -1;
+     hipModule_t module                   = nullptr;
+     hipFunction_t kernel                 = nullptr;
 #   endif
 
     xmrig_cuda::Algorithm algorithm     = xmrig_cuda::Algorithm::INVALID;
@@ -102,8 +102,8 @@ struct nvid_ctx {
 
     uint32_t kawpow_period              = 0;
 
-    CUmodule kawpow_module              = nullptr;
-    CUfunction kawpow_kernel            = nullptr;
+    hipModule_t kawpow_module           = nullptr;
+    hipFunction_t kawpow_kernel         = nullptr;
 #   endif
 };
 
