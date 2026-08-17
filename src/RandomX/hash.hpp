@@ -44,6 +44,14 @@ __global__ void debug_validate_hashes(const uint64_t* hashes, uint32_t batch_siz
         *valid = 0;
         *invalid_count = 0;
 
+        printf("[RX-DEBUG] target=0x%016llx batch=%u\n", (unsigned long long)target, batch_size);
+        for (uint32_t i = 0; i < (batch_size < 4 ? batch_size : 4); ++i) {
+            const uint64_t* h = hashes + i * 4;
+            printf("[RX-DEBUG] hash[%u] = 0x%016llx 0x%016llx 0x%016llx 0x%016llx\n",
+                   (unsigned)i, (unsigned long long)h[0], (unsigned long long)h[1],
+                   (unsigned long long)h[2], (unsigned long long)h[3]);
+        }
+
         for (uint32_t i = 0; i < batch_size; ++i) {
             const uint64_t* h = hashes + i * 4;
             if (h[3] < target) {
