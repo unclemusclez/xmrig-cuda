@@ -20,6 +20,60 @@ You should have received a copy of the GNU General Public License
 along with RandomX CUDA.  If not, see<http://www.gnu.org/licenses/>.
 */
 
+#include <cmath>
+
+__device__ __forceinline__ double hip_longlong_as_double(uint64_t x) {
+    union { uint64_t u; double d; } c;
+    c.u = x;
+    return c.d;
+}
+
+__device__ __forceinline__ uint64_t hip_double_as_longlong(double x) {
+    union { uint64_t u; double d; } c;
+    c.d = x;
+    return c.u;
+}
+
+__device__ __forceinline__ double hip_int2double_rn(int value) {
+    return static_cast<double>(value);
+}
+
+__device__ __forceinline__ double hip_fma_rn(double a, double b, double c) {
+    return fma(a, b, c);
+}
+
+__device__ __forceinline__ double hip_ddiv_rn(double a, double b) {
+    return a / b;
+}
+
+__device__ __forceinline__ double hip_dsqrt_rn(double x) {
+    return sqrt(x);
+}
+
+#define __longlong_as_double(x) hip_longlong_as_double(x)
+#define __double_as_longlong(x) hip_double_as_longlong(x)
+#define __int2double_rn(x) hip_int2double_rn(x)
+#define __fma_rn(a, b, c) hip_fma_rn(a, b, c)
+#define __ddiv_rn(a, b) hip_ddiv_rn(a, b)
+#define __dsqrt_rn(x) hip_dsqrt_rn(x)
+#define __fma_rd(a, b, c) hip_fma_rn(a, b, c)
+#define __fma_ru(a, b, c) hip_fma_rn(a, b, c)
+#define __fma_rz(a, b, c) hip_fma_rn(a, b, c)
+#define __ddiv_rd(a, b) hip_ddiv_rn(a, b)
+#define __ddiv_ru(a, b) hip_ddiv_rn(a, b)
+#define __dsqrt_rd(x) hip_dsqrt_rn(x)
+#define __dsqrt_ru(x) hip_dsqrt_rn(x)
+
+__device__ __forceinline__ uint32_t hip_bfind_u32(uint32_t x) {
+    uint32_t result = 0;
+    if (x >= 0x10000U) { x >>= 16; result += 16; }
+    if (x >= 0x100U) { x >>= 8; result += 8; }
+    if (x >= 0x10U) { x >>= 4; result += 4; }
+    if (x >= 0x4U) { x >>= 2; result += 2; }
+    if (x >= 0x2U) { result += 1; }
+    return result;
+}
+
 constexpr size_t HASH_SIZE = 64;
 constexpr size_t ENTROPY_SIZE = 128 + ((RANDOMX_PROGRAM_SIZE * 8 + 127) / 128) * 128;
 constexpr size_t REGISTERS_SIZE = 256;
@@ -84,8 +138,7 @@ __device__ void test_memory_access(uint64_t* r, uint8_t* scratchpad, uint32_t ba
 		if (x < 0x20000000U) mask = 2097088;
 
 		uint32_t addr = x & mask;
-		uint64_t offset;
-		asm("mul.wide.u32 %0,%1,%2;" : "=l"(offset) : "r"(addr), "r"(batch_size));
+		uint64_t offset = static_cast<uint64_t>(addr) * static_cast<uint64_t>(batch_size);
 
 		x = x * 0x08088405U + 1;
 		uint64_t* p = (uint64_t*)(scratchpad + offset + (x & 56));
@@ -154,8 +207,7 @@ __device__ uint64_t imul_rcp_value(uint32_t divisor)
 	uint64_t quotient = p2exp63 / divisor;
 	uint64_t remainder = p2exp63 % divisor;
 
-	uint32_t bsr;
-	asm("bfind.u32 %0,%1;" : "=r"(bsr) : "r"(divisor));
+	uint32_t bsr = hip_bfind_u32(divisor);
 
 	for (uint32_t shift = 0; shift <= bsr; ++shift)
 	{
@@ -169,13 +221,12 @@ __device__ uint64_t imul_rcp_value(uint32_t divisor)
 
 __device__ void set_byte(uint64_t& a, uint32_t position, uint64_t value)
 {
-	asm("bfi.b64 %0,%1,%2,%3,8;" : "=l"(a) : "l"(value), "l"(a), "r"(position << 3));
+	a = (a & ~(0xFFULL << (position * 8))) | ((value & 0xFFULL) << (position * 8));
 }
 
 __device__ uint32_t get_byte(uint64_t a, uint32_t position)
 {
-	uint64_t result;
-	asm("bfe.u64 %0,%1,%2,8;" : "=l"(result) : "l"(a), "r"(position * 8));
+	uint64_t result = (a >> (position * 8)) & 0xFF;
 	return static_cast<uint32_t>(result);
 }
 
@@ -1714,9 +1765,7 @@ template<> __device__ double sqrt_rnd<-1, true>(double a, uint32_t fprc)
 
 template<> __device__ double div_rnd<-1, false>(double a, double b, uint32_t fprc)
 {
-	// Initial approximation
-	double y0;
-	asm("rcp.approx.ftz.f64 %0, %1;" : "=d"(y0) : "d"(b));
+	double y0 = 1.0 / b;
 
 	// Improve initial approximation (can be skipped)
 	// 1 of 2^31 quotients will be incorrect in the last bit without it (1 incorrect hash per ~32768 hashes)
@@ -1769,9 +1818,8 @@ template<> __device__ double div_rnd<-1, false>(double a, double b, uint32_t fpr
 
 template<> __device__ double sqrt_rnd<-1, false>(double x, uint32_t fprc)
 {
-	// Initial approximation
-	double y0, t0, t1;
-	asm("rsqrt.approx.ftz.f64 %0, %1;" : "=d"(y0) : "d"(x));
+	double y0 = 1.0 / sqrt(x);
+	double t0, t1;
 
 	// Improve initial approximation (can be skipped)
 	// 1 of 2^28 square roots will be incorrect in the last bit without it (1 incorrect hash per ~2731 hashes)
@@ -1893,8 +1941,7 @@ __device__ void inner_loop(
 			{
 				asm("// SCRATCHPAD ACCESS BEGIN");
 
-				uint32_t loc_shift;
-				asm("bfe.u32 %0, %1, 21, 5;" : "=r"(loc_shift) : "r"(imm.x));
+			uint32_t loc_shift = (imm.x >> 21) & 0x1F;
 				const uint32_t mask = (0xFFFFFFFFU >> loc_shift) - 7;
 
 				const bool is_read = (opcode != 10);

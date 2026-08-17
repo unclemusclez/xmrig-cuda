@@ -35,17 +35,17 @@ __global__ void find_shares(const void* hashes, uint64_t target, uint32_t* share
 void hash(nvid_ctx *ctx, uint32_t nonce, uint32_t nonce_offset, uint64_t target, uint32_t *rescount, uint32_t *resnonce, uint32_t batch_size)
 {
     if (ctx->inputlen <= 128) {
-        CUDA_CHECK_KERNEL(ctx->device_id, blake2b_initial_hash << <batch_size / 32, 32 >> > (ctx->d_rx_hashes, ctx->d_input, ctx->inputlen, nonce));
+        CUDA_CHECK_KERNEL(ctx->device_id, blake2b_initial_hash<<<batch_size / 32, 32>>>(ctx->d_rx_hashes, ctx->d_input, ctx->inputlen, nonce));
     }
     else if (ctx->inputlen <= 256) {
-        CUDA_CHECK_KERNEL(ctx->device_id, blake2b_initial_hash_double << <batch_size / 32, 32 >> > (ctx->d_rx_hashes, ctx->d_input, ctx->inputlen, nonce));
+        CUDA_CHECK_KERNEL(ctx->device_id, blake2b_initial_hash_double<<<batch_size / 32, 32>>>(ctx->d_rx_hashes, ctx->d_input, ctx->inputlen, nonce));
     }
     else {
-        CUDA_CHECK_KERNEL(ctx->device_id, blake2b_initial_hash_big << <batch_size / 32, 32 >> > (ctx->d_rx_hashes, ctx->d_input, ctx->inputlen, nonce, nonce_offset));
+        CUDA_CHECK_KERNEL(ctx->device_id, blake2b_initial_hash_big<<<batch_size / 32, 32>>>(ctx->d_rx_hashes, ctx->d_input, ctx->inputlen, nonce, nonce_offset));
     }
 
     CUDA_CHECK_KERNEL(ctx->device_id, fillAes1Rx4<RANDOMX_SCRATCHPAD_L3, false, 64><<<batch_size / 32, 32 * 4>>>(ctx->d_rx_hashes, ctx->d_long_state, batch_size));
-    CUDA_CHECK(ctx->device_id, cudaMemset(ctx->d_rx_rounding, 0, batch_size * sizeof(uint32_t)));
+    CUDA_CHECK(ctx->device_id, hipMemset(ctx->d_rx_rounding, 0, batch_size * sizeof(uint32_t)));
 
     for (size_t i = 0; i < RANDOMX_PROGRAM_COUNT; ++i) {
         CUDA_CHECK_KERNEL(ctx->device_id, fillAes4Rx4<ENTROPY_SIZE, false><<<batch_size / 32, 32 * 4>>>(ctx->d_rx_hashes, ctx->d_rx_entropy, batch_size));
@@ -63,11 +63,11 @@ void hash(nvid_ctx *ctx, uint32_t nonce, uint32_t nonce_offset, uint64_t target,
         }
     }
 
-    CUDA_CHECK(ctx->device_id, cudaMemset(ctx->d_result_nonce, 0, 10 * sizeof(uint32_t)));
+    CUDA_CHECK(ctx->device_id, hipMemset(ctx->d_result_nonce, 0, 10 * sizeof(uint32_t)));
     CUDA_CHECK_KERNEL(ctx->device_id, find_shares<<<batch_size / 32, 32>>>(ctx->d_rx_hashes, target, ctx->d_result_nonce));
-    CUDA_CHECK(ctx->device_id, cudaDeviceSynchronize());
+    CUDA_CHECK(ctx->device_id, hipDeviceSynchronize());
 
-    CUDA_CHECK(ctx->device_id, cudaMemcpy(resnonce, ctx->d_result_nonce, 10 * sizeof(uint32_t), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(ctx->device_id, hipMemcpy(resnonce, ctx->d_result_nonce, 10 * sizeof(uint32_t), hipMemcpyDeviceToHost));
 
     *rescount = resnonce[0];
     if (*rescount > 9) {

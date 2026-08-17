@@ -551,9 +551,7 @@ static __constant__ uint32_t AES_STATE_HASH[16] = {
 
 __device__ uint32_t get_byte(uint32_t a, uint32_t start_bit)
 {
-	uint32_t result;
-	asm("bfe.u32 %0, %1, %2, 8;" : "=r"(result) : "r"(a), "r"(start_bit));
-	return result;
+	return (a >> start_bit) & 0xFF;
 }
 
 template<uint64_t outputSize, bool strided, uint64_t gap = 0>

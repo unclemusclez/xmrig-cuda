@@ -2,7 +2,7 @@
 #include <sstream>
 #include <mutex>
 #include <cstring>
-#include <nvrtc.h>
+#include <hip/hiprtc.h>
 #include <thread>
 
 
@@ -163,68 +163,68 @@ static void KawPow_build_program(
         }
     }
 
-    nvrtcProgram prog;
-    nvrtcResult result = nvrtcCreateProgram(&prog, source.c_str(), "KawPow.cu", 0, nullptr, nullptr);
-    if (result != NVRTC_SUCCESS) {
-        CUDA_THROW(nvrtcGetErrorString(result));
+    hiprtcProgram prog;
+    hiprtcResult result = hiprtcCreateProgram(&prog, source.c_str(), "KawPow.cu", 0, nullptr, nullptr);
+    if (result != HIPRTC_SUCCESS) {
+        HIP_THROW(hiprtcGetErrorString(result));
     }
 
-    result = nvrtcAddNameExpression(prog, "progpow_search");
-    if (result != NVRTC_SUCCESS) {
-        nvrtcDestroyProgram(&prog);
+    result = hiprtcAddNameExpression(prog, "progpow_search");
+    if (result != HIPRTC_SUCCESS) {
+        hiprtcDestroyProgram(&prog);
 
-        CUDA_THROW(nvrtcGetErrorString(result));
+        HIP_THROW(hiprtcGetErrorString(result));
     }
 
     char opt0[64];
     sprintf(opt0, "--gpu-architecture=compute_%d%d", arch_major, arch_minor);
 
     const char* opts[1] = { opt0 };
-    result = nvrtcCompileProgram(prog, 1, opts);
-    if (result != NVRTC_SUCCESS) {
+    result = hiprtcCompileProgram(prog, 1, opts);
+    if (result != HIPRTC_SUCCESS) {
         size_t logSize;
-        if (nvrtcGetProgramLogSize(prog, &logSize) == NVRTC_SUCCESS) {
+        if (hiprtcGetProgramLogSize(prog, &logSize) == HIPRTC_SUCCESS) {
             char *log = new char[logSize]();
-            if (nvrtcGetProgramLog(prog, log) == NVRTC_SUCCESS) {
+            if (hiprtcGetProgramLog(prog, log) == HIPRTC_SUCCESS) {
                 printf("Program compile log: %s\n", log);
             }
 
             delete[] log;
         }
 
-        nvrtcDestroyProgram(&prog);
+        hiprtcDestroyProgram(&prog);
 
-        CUDA_THROW(nvrtcGetErrorString(result));
+        HIP_THROW(hiprtcGetErrorString(result));
     }
 
 
     const char* name;
-    result = nvrtcGetLoweredName(prog, "progpow_search", &name);
-    if (result != NVRTC_SUCCESS) {
-        nvrtcDestroyProgram(&prog);
+    result = hiprtcGetLoweredName(prog, "progpow_search", &name);
+    if (result != HIPRTC_SUCCESS) {
+        hiprtcDestroyProgram(&prog);
 
-        CUDA_THROW(nvrtcGetErrorString(result));
+        HIP_THROW(hiprtcGetErrorString(result));
     }
 
     size_t ptxSize;
-    result = nvrtcGetPTXSize(prog, &ptxSize);
-    if (result != NVRTC_SUCCESS) {
-        nvrtcDestroyProgram(&prog);
+    result = hiprtcGetCodeSize(prog, &ptxSize);
+    if (result != HIPRTC_SUCCESS) {
+        hiprtcDestroyProgram(&prog);
 
-        CUDA_THROW(nvrtcGetErrorString(result));
+        HIP_THROW(hiprtcGetErrorString(result));
     }
 
     ptx.resize(ptxSize);
-    result = nvrtcGetPTX(prog, ptx.data());
-    if (result != NVRTC_SUCCESS) {
-        nvrtcDestroyProgram(&prog);
+    result = hiprtcGetCode(prog, ptx.data());
+    if (result != HIPRTC_SUCCESS) {
+        hiprtcDestroyProgram(&prog);
 
-        CUDA_THROW(nvrtcGetErrorString(result));
+        HIP_THROW(hiprtcGetErrorString(result));
     }
 
     lowered_name = name;
 
-    nvrtcDestroyProgram(&prog);
+    hiprtcDestroyProgram(&prog);
 
     {
         std::lock_guard<std::mutex> g(KawPow_cache_mutex);

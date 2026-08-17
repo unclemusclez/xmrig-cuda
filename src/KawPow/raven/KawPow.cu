@@ -41,14 +41,14 @@ void kawpow_prepare(nvid_ctx *ctx, const void* cache, size_t cache_size, const v
         ctx->kawpow_cache_size = cache_size;
 
         if (!dag_precalc) {
-            if (cache_size > ctx->kawpow_cache_capacity) {
-                CUDA_CHECK(ctx->device_id, cudaFree(ctx->kawpow_cache));
+        if (cache_size > ctx->kawpow_cache_capacity) {
+            CUDA_CHECK(ctx->device_id, hipFree(ctx->kawpow_cache));
 
-                ctx->kawpow_cache_capacity = ((cache_size + MEM_ALIGN - 1) / MEM_ALIGN) * MEM_ALIGN;
-                CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->kawpow_cache, ctx->kawpow_cache_capacity));
-            }
+            ctx->kawpow_cache_capacity = ((cache_size + MEM_ALIGN - 1) / MEM_ALIGN) * MEM_ALIGN;
+            CUDA_CHECK(ctx->device_id, hipMalloc(&ctx->kawpow_cache, ctx->kawpow_cache_capacity));
+        }
 
-            CUDA_CHECK(ctx->device_id, cudaMemcpy((uint8_t*)(ctx->kawpow_cache), cache, cache_size, cudaMemcpyHostToDevice));
+        CUDA_CHECK(ctx->device_id, hipMemcpy((uint8_t*)(ctx->kawpow_cache), cache, cache_size, hipMemcpyHostToDevice));
         }
     }
 
@@ -56,14 +56,14 @@ void kawpow_prepare(nvid_ctx *ctx, const void* cache, size_t cache_size, const v
         ctx->kawpow_dag_size = dag_size;
 
         if (dag_size > ctx->kawpow_dag_capacity) {
-            CUDA_CHECK(ctx->device_id, cudaFree(ctx->kawpow_dag));
+            CUDA_CHECK(ctx->device_id, hipFree(ctx->kawpow_dag));
 
             ctx->kawpow_dag_capacity = ((dag_size + MEM_ALIGN - 1) / MEM_ALIGN) * MEM_ALIGN;
-            CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->kawpow_dag, ctx->kawpow_dag_capacity));
+            CUDA_CHECK(ctx->device_id, hipMalloc(&ctx->kawpow_dag, ctx->kawpow_dag_capacity));
         }
 
         if (dag_precalc) {
-            CUDA_CHECK(ctx->device_id, cudaMemcpy((uint8_t*)(ctx->kawpow_dag), cache, cache_size, cudaMemcpyHostToDevice));
+            CUDA_CHECK(ctx->device_id, hipMemcpy((uint8_t*)(ctx->kawpow_dag), cache, cache_size, hipMemcpyHostToDevice));
         }
 
         constexpr int blocks = 8192;
@@ -84,11 +84,11 @@ void kawpow_prepare(nvid_ctx *ctx, const void* cache, size_t cache_size, const v
                 (hash64_t*)(dag_precalc ? ctx->kawpow_dag : ctx->kawpow_cache),
                 light_words
             ));
-            CUDA_CHECK(ctx->device_id, cudaDeviceSynchronize());
+            CUDA_CHECK(ctx->device_id, hipDeviceSynchronize());
         }
 
         if (dag_precalc) {
-            CUDA_CHECK(ctx->device_id, cudaMemcpy((uint8_t*)(ctx->kawpow_dag), dag_precalc, cache_items * sizeof(hash64_t), cudaMemcpyHostToDevice));
+            CUDA_CHECK(ctx->device_id, hipMemcpy((uint8_t*)(ctx->kawpow_dag), dag_precalc, cache_items * sizeof(hash64_t), hipMemcpyHostToDevice));
         }
     }
 
@@ -97,15 +97,15 @@ void kawpow_prepare(nvid_ctx *ctx, const void* cache, size_t cache_size, const v
 
     if (ctx->kawpow_period != period) {
         if (ctx->kawpow_module) {
-            cuModuleUnload(ctx->kawpow_module);
+            CU_CHECK(ctx->device_id, hipModuleUnload(ctx->kawpow_module));
         }
 
         std::vector<char> ptx;
         std::string lowered_name;
         KawPow_get_program(ptx, lowered_name, period, ctx->device_threads, ctx->device_arch[0], ctx->device_arch[1], dag_sizes);
 
-        CU_CHECK(ctx->device_id, cuModuleLoadDataEx(&ctx->kawpow_module, ptx.data(), 0, 0, 0));
-        CU_CHECK(ctx->device_id, cuModuleGetFunction(&ctx->kawpow_kernel, ctx->kawpow_module, lowered_name.c_str()));
+        CU_CHECK(ctx->device_id, hipModuleLoadDataEx(&ctx->kawpow_module, ptx.data(), 0, 0, 0));
+        CU_CHECK(ctx->device_id, hipModuleGetFunction(&ctx->kawpow_kernel, ctx->kawpow_module, lowered_name.c_str()));
 
         ctx->kawpow_period = period;
 
@@ -113,8 +113,14 @@ void kawpow_prepare(nvid_ctx *ctx, const void* cache, size_t cache_size, const v
     }
 
     if (!ctx->kawpow_stop_host) {
-        CUDA_CHECK(ctx->device_id, cudaMallocHost(&ctx->kawpow_stop_host, sizeof(uint32_t) * 2));
-        CUDA_CHECK(ctx->device_id, cudaHostGetDevicePointer(&ctx->kawpow_stop_device, ctx->kawpow_stop_host, 0));
+        void* temp = nullptr;
+        CUDA_CHECK(ctx->device_id, hipMallocHost(&temp, sizeof(uint32_t) * 2));
+        ctx->kawpow_stop_host = static_cast<uint32_t*>(temp);
+        {
+            void* devPtr = nullptr;
+            CUDA_CHECK(ctx->device_id, hipHostGetDevicePointer(&devPtr, ctx->kawpow_stop_host, 0));
+            ctx->kawpow_stop_device = static_cast<uint32_t*>(devPtr);
+        }
     }
 }
 
@@ -137,22 +143,22 @@ void hash(nvid_ctx *ctx, uint8_t* job_blob, uint64_t target, uint32_t *rescount,
     uint32_t hack_false = 0;
     void* args[] = { &ctx->kawpow_dag, &ctx->d_input, &target, &hack_false, &ctx->d_result_nonce, &ctx->kawpow_stop_device };
 
-    CUDA_CHECK(ctx->device_id, cudaMemcpy(ctx->d_input, job_blob, 40, cudaMemcpyHostToDevice));
-    CUDA_CHECK(ctx->device_id, cudaMemset(ctx->d_result_nonce, 0, sizeof(uint32_t)));
+    CUDA_CHECK(ctx->device_id, hipMemcpy(ctx->d_input, job_blob, 40, hipMemcpyHostToDevice));
+    CUDA_CHECK(ctx->device_id, hipMemset(ctx->d_result_nonce, 0, sizeof(uint32_t)));
     memset(ctx->kawpow_stop_host, 0, sizeof(uint32_t) * 2);
 
-    CU_CHECK(ctx->device_id, cuLaunchKernel(
-        ctx->kawpow_kernel,
-        grid.x, grid.y, grid.z,
-        block.x, block.y, block.z,
-        0, nullptr, args, 0
+    CU_CHECK(ctx->device_id, hipLaunchKernel(
+        (const void*)ctx->kawpow_kernel,
+        grid, block,
+        args,
+        0, nullptr
     ));
-    CU_CHECK(ctx->device_id, cuCtxSynchronize());
+    CU_CHECK(ctx->device_id, hipCtxSynchronize());
 
     *skipped_hashes = ctx->kawpow_stop_host[1];
 
     uint32_t results[16];
-    CUDA_CHECK(ctx->device_id, cudaMemcpy(results, ctx->d_result_nonce, sizeof(results), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(ctx->device_id, hipMemcpy(results, ctx->d_result_nonce, sizeof(results), hipMemcpyDeviceToHost));
 
     if (results[0] > 15) {
         results[0] = 15;

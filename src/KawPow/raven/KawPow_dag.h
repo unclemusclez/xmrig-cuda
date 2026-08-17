@@ -1,8 +1,10 @@
 #define ETHASH_HASH_BYTES 64
 #define ETHASH_DATASET_PARENTS 512
 
-#if (__CUDACC_VER_MAJOR__ > 8)
-#define SHFL(x, y, z) __shfl_sync(0xFFFFFFFF, (x), (y), (z))
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP__)
+#define SHFL(x, y, z) __shfl_sync(0xFFFFFFFFULL, (x), (y), (z))
+#elif defined(__CUDACC__)
+#define SHFL(x, y, z) __shfl_sync(0xFFFFFFFFULL, (x), (y), (z))
 #else
 #define SHFL(x, y, z) __shfl((x), (y), (z))
 #endif
@@ -37,18 +39,7 @@ __device__ __constant__ const uint64_t keccakf_rndc[24] = {
 
 __device__ __forceinline__ uint64_t ROTL64(const uint64_t x, const int offset)
 {
-    uint64_t result;
-    asm("{\n\t"
-        ".reg .b64 lhs;\n\t"
-        ".reg .u32 roff;\n\t"
-        "shl.b64 lhs, %1, %2;\n\t"
-        "sub.u32 roff, 64, %2;\n\t"
-        "shr.b64 %0, %1, roff;\n\t"
-        "add.u64 %0, lhs, %0;\n\t"
-        "}\n"
-        : "=l"(result)
-        : "l"(x), "r"(offset));
-    return result;
+    return (x << offset) | (x >> (64 - offset));
 }
 
 __device__ __forceinline__ void keccak_f1600_round(uint64_t st[25], const int r)
