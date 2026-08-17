@@ -1,0 +1,6 @@
+[submodule ".reference/RandomX"]
+	path = .reference/RandomX
+	url = https://github.com/tevador/RandomX.git
+[submodule ".reference/xmrig"]
+	path = .reference/xmrig
+	url = https://github.com/xmrig/xmrig.git
