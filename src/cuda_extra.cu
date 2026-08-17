@@ -28,8 +28,8 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
-#include <cuda.h>
-#include <cuda_runtime.h>
+#include <hip/hip_runtime.h>
+#include <hip/hip_runtime.h>
 
 typedef unsigned char BitSequence;
 typedef unsigned long long DataLength;
@@ -299,14 +299,14 @@ void cryptonight_extra_cpu_set_data(nvid_ctx *ctx, const void *data, size_t len)
 
     ctx->inputlen = static_cast<unsigned int>(inlen);
 
-    CUDA_CHECK(ctx->device_id, cudaMemcpy(ctx->d_input, buf, ctx->inputlen, cudaMemcpyHostToDevice));
+    CUDA_CHECK(ctx->device_id, hipMemcpy(ctx->d_input, buf, ctx->inputlen, hipMemcpyHostToDevice));
 }
 
 
 void cuda_extra_cpu_set_data(nvid_ctx *ctx, const void *data, size_t len)
 {
     ctx->inputlen = static_cast<unsigned int>(len);
-    CUDA_CHECK(ctx->device_id, cudaMemcpy(ctx->d_input, data, len, cudaMemcpyHostToDevice));
+    CUDA_CHECK(ctx->device_id, hipMemcpy(ctx->d_input, data, len, hipMemcpyHostToDevice));
 }
 
 
@@ -315,42 +315,42 @@ int cryptonight_extra_cpu_init(nvid_ctx *ctx, const xmrig_cuda::Algorithm &algor
     using namespace xmrig_cuda;
 
 #   ifdef XMRIG_ALGO_CN_R
-    CU_CHECK(ctx->device_id, cuDeviceGet(&ctx->cuDevice, ctx->device_id));
+    CU_CHECK(ctx->device_id, hipDeviceGet(&ctx->cuDevice, ctx->device_id));
 
-    CUcontext cuContext;
-    CU_CHECK(ctx->device_id, cuDevicePrimaryCtxRetain(&cuContext, ctx->cuDevice));
+    hipCtx_t cuContext;
+    CU_CHECK(ctx->device_id, hipDevicePrimaryCtxRetain(&cuContext, ctx->cuDevice));
 #   endif
 
-    cudaError_t err;
-    err = cudaSetDevice(ctx->device_id);
-    if (err != cudaSuccess) {
-        printf("GPU %d: %s", ctx->device_id, cudaGetErrorString(err));
+    hipError_t err;
+    err = hipSetDevice(ctx->device_id);
+    if (err != hipSuccess) {
+        printf("GPU %d: %s", ctx->device_id, hipGetErrorString(err));
         return 0;
     }
 
-    CUDA_CHECK(ctx->device_id, cudaDeviceReset());
-    const unsigned int device_flags = cudaDeviceMapHost;
+    CUDA_CHECK(ctx->device_id, hipDeviceReset());
+    const unsigned int device_flags = hipDeviceMapHost;
     switch (ctx->syncMode)
     {
     case 0:
-        CUDA_CHECK(ctx->device_id, cudaSetDeviceFlags(device_flags | cudaDeviceScheduleAuto));
+        CUDA_CHECK(ctx->device_id, hipSetDeviceFlags(device_flags | hipDeviceScheduleAuto));
         break;
     case 1:
-        CUDA_CHECK(ctx->device_id, cudaSetDeviceFlags(device_flags | cudaDeviceScheduleSpin));
+        CUDA_CHECK(ctx->device_id, hipSetDeviceFlags(device_flags | hipDeviceScheduleSpin));
         break;
     case 2:
-        CUDA_CHECK(ctx->device_id, cudaSetDeviceFlags(device_flags | cudaDeviceScheduleYield));
+        CUDA_CHECK(ctx->device_id, hipSetDeviceFlags(device_flags | hipDeviceScheduleYield));
         break;
     default:
-        CUDA_CHECK(ctx->device_id, cudaSetDeviceFlags(device_flags | cudaDeviceScheduleBlockingSync));
+        CUDA_CHECK(ctx->device_id, hipSetDeviceFlags(device_flags | hipDeviceScheduleBlockingSync));
         break;
     };
 
-    CUDA_CHECK(ctx->device_id, cudaDeviceSetCacheConfig(cudaFuncCachePreferShared));
+    CUDA_CHECK(ctx->device_id, hipDeviceSetCacheConfig(hipFuncCachePreferShared));
 
     size_t wsize = ctx->device_blocks * ctx->device_threads;
     if (algorithm.family() != Algorithm::KAWPOW) {
-        CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_ctx_state, 50 * sizeof(uint32_t) * wsize));
+        CUDA_CHECK(ctx->device_id, hipMalloc((void**)&ctx->d_ctx_state, 50 * sizeof(uint32_t) * wsize));
     }
     size_t ctx_b_size = 4 * sizeof(uint32_t) * wsize;
 
@@ -358,7 +358,7 @@ int cryptonight_extra_cpu_init(nvid_ctx *ctx, const xmrig_cuda::Algorithm &algor
         // extent ctx_b to hold the state of idx0
         ctx_b_size += sizeof(uint32_t) * wsize;
         // create a double buffer for the state to exchange the mixed state to phase1
-        CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_ctx_state2, 50 * sizeof(uint32_t) * wsize));
+        CUDA_CHECK(ctx->device_id, hipMalloc((void**)&ctx->d_ctx_state2, 50 * sizeof(uint32_t) * wsize));
     }
     else if (algorithm.id() == Algorithm::CN_CCX) {
         ctx_b_size += sizeof(uint32_t) * 4 * wsize;
@@ -367,21 +367,21 @@ int cryptonight_extra_cpu_init(nvid_ctx *ctx, const xmrig_cuda::Algorithm &algor
         ctx->d_ctx_state2 = ctx->d_ctx_state;
     }
 
-    CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_input, kMaxBlobSize));
+    CUDA_CHECK(ctx->device_id, hipMalloc((void**)&ctx->d_input, kMaxBlobSize));
     if (algorithm.family() != Algorithm::KAWPOW) {
-        CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_result_count, sizeof(uint32_t)));
+        CUDA_CHECK(ctx->device_id, hipMalloc((void**)&ctx->d_result_count, sizeof(uint32_t)));
     }
-    CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_result_nonce, 16 * sizeof (uint32_t)));
+    CUDA_CHECK(ctx->device_id, hipMalloc((void**)&ctx->d_result_nonce, 16 * sizeof (uint32_t)));
 
     // Allocate buffers for Cryptonight
     if (hashMemSize && algorithm.isCN()) {
-        CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_ctx_key1, 40 * sizeof(uint32_t) * wsize));
-        CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_ctx_key2, 40 * sizeof(uint32_t) * wsize));
-        CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_ctx_text, 32 * sizeof(uint32_t) * wsize));
-        CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_ctx_a, 4 * sizeof(uint32_t) * wsize));
-        CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_ctx_b, ctx_b_size));
+        CUDA_CHECK(ctx->device_id, hipMalloc((void**)&ctx->d_ctx_key1, 40 * sizeof(uint32_t) * wsize));
+        CUDA_CHECK(ctx->device_id, hipMalloc((void**)&ctx->d_ctx_key2, 40 * sizeof(uint32_t) * wsize));
+        CUDA_CHECK(ctx->device_id, hipMalloc((void**)&ctx->d_ctx_text, 32 * sizeof(uint32_t) * wsize));
+        CUDA_CHECK(ctx->device_id, hipMalloc((void**)&ctx->d_ctx_a, 4 * sizeof(uint32_t) * wsize));
+        CUDA_CHECK(ctx->device_id, hipMalloc((void**)&ctx->d_ctx_b, ctx_b_size));
         ctx->d_scratchpads_size = hashMemSize * wsize;
-        CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_long_state, ctx->d_scratchpads_size));
+        CUDA_CHECK(ctx->device_id, hipMalloc((void**)&ctx->d_long_state, ctx->d_scratchpads_size));
     }
 
     ctx->ready = true;
@@ -406,7 +406,7 @@ void cryptonight_extra_cpu_prepare(nvid_ctx *ctx, uint32_t startNonce, const xmr
         CUDA_CHECK_KERNEL(ctx->device_id, cryptonight_extra_gpu_prepare<Algorithm::CN_HEAVY_0><<<grid, block >>>(wsize, ctx->d_input, ctx->inputlen, startNonce,
             ctx->d_ctx_state, ctx->d_ctx_state2, ctx->d_ctx_a, ctx->d_ctx_b, ctx->d_ctx_key1, ctx->d_ctx_key2));
     } else if (algorithm == Algorithm::CN_R) {
-        CUDA_CHECK_KERNEL(ctx->device_id, cryptonight_extra_gpu_prepare<Algorithm::CN_R> << <grid, block >> > (wsize, ctx->d_input, ctx->inputlen, startNonce,
+        CUDA_CHECK_KERNEL(ctx->device_id, cryptonight_extra_gpu_prepare<Algorithm::CN_R> <<<grid, block>>> (wsize, ctx->d_input, ctx->inputlen, startNonce,
             ctx->d_ctx_state, ctx->d_ctx_state2, ctx->d_ctx_a, ctx->d_ctx_b, ctx->d_ctx_key1, ctx->d_ctx_key2));
     } else if (algorithm.base() == Algorithm::CN_2 || algorithm == Algorithm::CN_PICO_0 || algorithm == Algorithm::CN_PICO_TLO) {
         CUDA_CHECK_KERNEL(ctx->device_id, cryptonight_extra_gpu_prepare<Algorithm::CN_2><<<grid, block >>>(wsize, ctx->d_input, ctx->inputlen, startNonce,
@@ -427,20 +427,20 @@ void cryptonight_extra_cpu_final(nvid_ctx *ctx, uint32_t startNonce, uint64_t ta
     dim3 grid( ( wsize + threadsperblock - 1 ) / threadsperblock );
     dim3 block( threadsperblock );
 
-    CUDA_CHECK(ctx->device_id, cudaMemset(ctx->d_result_nonce, 0xFF, 16 * sizeof(uint32_t)));
-    CUDA_CHECK(ctx->device_id, cudaMemset(ctx->d_result_count, 0, sizeof(uint32_t)));
+    CUDA_CHECK(ctx->device_id, hipMemset(ctx->d_result_nonce, 0xFF, 16 * sizeof(uint32_t)));
+    CUDA_CHECK(ctx->device_id, hipMemset(ctx->d_result_count, 0, sizeof(uint32_t)));
 
     if (algorithm.family() == Algorithm::CN_HEAVY) {
         CUDA_CHECK_KERNEL(ctx->device_id, cryptonight_extra_gpu_final<Algorithm::CN_HEAVY_0><<<grid, block >>>( wsize, target, ctx->d_result_count, ctx->d_result_nonce, ctx->d_ctx_state,ctx->d_ctx_key2 ));
     } else {
         // fallback for all other algorithms
-        CUDA_CHECK_KERNEL(ctx->device_id, cryptonight_extra_gpu_final<Algorithm::CN_0> << <grid, block >> > (wsize, target, ctx->d_result_count, ctx->d_result_nonce, ctx->d_ctx_state, ctx->d_ctx_key2));
+        CUDA_CHECK_KERNEL(ctx->device_id, cryptonight_extra_gpu_final<Algorithm::CN_0> <<<grid, block>>> (wsize, target, ctx->d_result_count, ctx->d_result_nonce, ctx->d_ctx_state, ctx->d_ctx_key2));
     }
 
-    CUDA_CHECK(ctx->device_id, cudaDeviceSynchronize());
+    CUDA_CHECK(ctx->device_id, hipDeviceSynchronize());
 
-    CUDA_CHECK(ctx->device_id, cudaMemcpy(rescount, ctx->d_result_count, sizeof(uint32_t), cudaMemcpyDeviceToHost));
-    CUDA_CHECK(ctx->device_id, cudaMemcpy(resnonce, ctx->d_result_nonce, 16 * sizeof(uint32_t), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(ctx->device_id, hipMemcpy(rescount, ctx->d_result_count, sizeof(uint32_t), hipMemcpyDeviceToHost));
+    CUDA_CHECK(ctx->device_id, hipMemcpy(resnonce, ctx->d_result_nonce, 16 * sizeof(uint32_t), hipMemcpyDeviceToHost));
 
     /* There is only a 32bit limit for the counter on the device side
     * therefore this value can be greater than 10, in that case limit rescount
@@ -458,7 +458,7 @@ void cryptonight_extra_cpu_final(nvid_ctx *ctx, uint32_t startNonce, uint64_t ta
 int cuda_get_devicecount()
 {
     int deviceCount = 0;
-    if (cudaGetDeviceCount(&deviceCount) == cudaSuccess) {
+    if (hipGetDeviceCount(&deviceCount) == hipSuccess) {
         return deviceCount;
     }
 
@@ -468,7 +468,7 @@ int cuda_get_devicecount()
 int cuda_get_runtime_version()
 {
     int version = 0;
-    if (cudaRuntimeGetVersion(&version) == cudaSuccess) {
+    if (hipRuntimeGetVersion(&version) == hipSuccess) {
         return version;
     }
 
@@ -478,7 +478,7 @@ int cuda_get_runtime_version()
 int cuda_get_driver_version()
 {
     int version = 0;
-    if (cudaDriverGetVersion(&version) == cudaSuccess) {
+    if (hipDriverGetVersion(&version) == hipSuccess) {
         return version;
     }
 
@@ -503,8 +503,8 @@ int cuda_get_deviceinfo(nvid_ctx *ctx)
         return 1;
     }
 
-    if (version < CUDART_VERSION) {
-        printf("Driver does not support CUDA %d.%d API! Update your nVidia driver!\n", CUDART_VERSION / 1000, (CUDART_VERSION % 1000) / 10);
+    if (version < 11040) {
+        printf("Driver does not support required API! Update your ROCm driver!\n");
         return 1;
     }
 
@@ -519,14 +519,14 @@ int cuda_get_deviceinfo(nvid_ctx *ctx)
     }
 
     // a device must be selected to get the right memory usage later on
-    if (cudaSetDevice(ctx->device_id) != cudaSuccess) {
+    if (hipSetDevice(ctx->device_id) != hipSuccess) {
         printf("WARNING: NVIDIA GPU %d: cannot be selected.\n", ctx->device_id);
         return 2;
     }
 
     // trigger that a context on the gpu will be allocated
     int* tmp;
-    if (cudaMalloc(&tmp, 256) != cudaSuccess) {
+    if (hipMalloc(&tmp, 256) != hipSuccess) {
         printf("WARNING: NVIDIA GPU %d: context cannot be created.\n", ctx->device_id);
         return 3;
     }
@@ -534,16 +534,16 @@ int cuda_get_deviceinfo(nvid_ctx *ctx)
     size_t freeMemory  = 0;
     size_t totalMemory = 0;
 
-    CUDA_CHECK(ctx->device_id, cudaMemGetInfo(&freeMemory, &totalMemory));
-    CUDA_CHECK(ctx->device_id, cudaFree(tmp));
-    CUDA_CHECK(ctx->device_id, cudaDeviceReset());
+    CUDA_CHECK(ctx->device_id, hipMemGetInfo(&freeMemory, &totalMemory));
+    CUDA_CHECK(ctx->device_id, hipFree(tmp));
+    CUDA_CHECK(ctx->device_id, hipDeviceReset());
     ctx->device_memoryFree = freeMemory;
     ctx->device_memoryTotal = totalMemory;
 
-    cudaDeviceProp props;
-    cudaError_t err = cudaGetDeviceProperties(&props, ctx->device_id);
-    if (err != cudaSuccess) {
-        printf("\nGPU %d: %s\n%s line %d\n", ctx->device_id, cudaGetErrorString(err), __FUNCTION__, __LINE__);
+    hipDeviceProp_t props;
+    hipError_t err = hipGetDeviceProperties(&props, ctx->device_id);
+    if (err != hipSuccess) {
+        printf("\nGPU %d: %s\n%s line %d\n", ctx->device_id, hipGetErrorString(err), __FUNCTION__, __LINE__);
         return 1;
     }
 

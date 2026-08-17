@@ -1,14 +1,14 @@
 #pragma once
 
 #include <stdint.h>
+#include <math.h>
 
 __device__ __forceinline__ uint64_t fast_div_heavy(int64_t _a, int32_t _b)
 {
 	int64_t a = abs(_a);
 	int32_t b = abs(_b);
 
-	float rcp;
-	asm("rcp.approx.f32 %0, %1;" : "=f"(rcp) : "f"(__int2float_rn(b)));
+	float rcp = 1.0f / __int2float_rn(b);
 	float rcp2 = __uint_as_float(__float_as_uint(rcp) + (32U << 23));
 
 	uint64_t q1 = __float2ull_rd(__int2float_rn(((int32_t*)&a)[1]) * rcp2);
