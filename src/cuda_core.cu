@@ -726,7 +726,7 @@ void cryptonight_core_gpu_hash(nvid_ctx* ctx, uint32_t nonce)
                 sizeof(uint64_t) * block.x * 8 + block.x * sizeof(uint32_t) * static_cast<int>(ctx->device_arch[0] < 3),
                 nullptr
             ));
-            HIP_DRV_CHECK(ctx->device_id, hipCtxSynchronize());
+            HIP_DRV_CHECK(ctx->device_id, hipDeviceSynchronize());
         } else
 #       endif
         if (BASE == Algorithm::CN_2) {
