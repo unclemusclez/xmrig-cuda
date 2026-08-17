@@ -116,7 +116,27 @@ set_source_files_properties(
 )
 
 if (XMRIG_OS_WIN)
-    # list(APPEND SOURCES res/app.rc)
+    if (NOT DEFINED ENV{WindowsSdkDir})
+        set(WindowsSdkDir "C:/Program Files (x86)/Windows Kits/10" CACHE PATH "Fallback Windows SDK root")
+    endif()
+    if (NOT DEFINED ENV{WindowsSDKVersion})
+        set(WindowsSDKVersion "10.0.26100.0" CACHE STRING "Fallback Windows SDK version")
+    endif()
+    set(RC_COMPILER "C:/Program Files (x86)/Windows Kits/10/bin/${WindowsSDKVersion}/x64/rc.exe")
+    set(RC_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/app.res)
+    add_custom_command(
+        OUTPUT ${RC_OUTPUT}
+        COMMAND ${RC_COMPILER}
+            /I "${CMAKE_CURRENT_SOURCE_DIR}/src"
+            /I "${WindowsSdkDir}/Include/${WindowsSDKVersion}/um"
+            /I "${WindowsSdkDir}/Include/${WindowsSDKVersion}/shared"
+            /fo ${RC_OUTPUT}
+            ${CMAKE_CURRENT_SOURCE_DIR}/res/app.rc
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/res/app.rc
+        COMMENT "Compiling Windows resource file"
+        VERBATIM
+    )
+    list(APPEND SOURCES ${RC_OUTPUT})
 endif()
 
 if (XMRIG_OS_APPLE)
@@ -126,6 +146,15 @@ endif()
 add_library(${CMAKE_PROJECT_NAME} SHARED ${SOURCES})
 target_link_libraries(${CMAKE_PROJECT_NAME} hip::host hiprtc::hiprtc roc::rocblas rocrand)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE __HIP_PLATFORM_AMD__)
+
+if (XMRIG_OS_WIN)
+    target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+        "$ENV{WindowsSdkDir}/Include/$ENV{WindowsSDKVersion}/um"
+        "$ENV{WindowsSdkDir}/Include/$ENV{WindowsSDKVersion}/shared"
+        "$ENV{WindowsSdkDir}/Include/$ENV{WindowsSDKVersion}/winrt"
+        "$ENV{WindowsSdkDir}/Include/$ENV{WindowsSDKVersion}/cppwinrt"
+    )
+endif()
 
 if (WITH_HIP_DRIVER_API AND WIN32)
     # HIPRTC DLLs are available in the ROCm bin directory; copy step disabled to avoid path mismatch during build
