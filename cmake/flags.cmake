@@ -1,8 +1,8 @@
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 
-set(CMAKE_C_STANDARD 99)
+set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 if ("${CMAKE_BUILD_TYPE}" STREQUAL "")
@@ -17,10 +17,10 @@ include(CheckSymbolExists)
 
 if (CMAKE_CXX_COMPILER_ID MATCHES GNU)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wno-strict-aliasing -fPIC")
-    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3")
 
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -fexceptions -fno-rtti -Wno-strict-aliasing -Wno-class-memaccess -fPIC")
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O2 -s")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -s")
 
     if (XMRIG_ARMv8)
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${ARM8_CXX_FLAGS}")
@@ -47,8 +47,8 @@ if (CMAKE_CXX_COMPILER_ID MATCHES GNU)
 
     add_definitions(/D_GNU_SOURCE)
 
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c11")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
 
     add_definitions(/DHAVE_BUILTIN_CLEAR_CACHE)
 
@@ -64,10 +64,10 @@ elseif (CMAKE_CXX_COMPILER_ID MATCHES MSVC)
 elseif (CMAKE_CXX_COMPILER_ID MATCHES Clang)
 
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall")
-    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2 -funroll-loops -fmerge-all-constants")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -funroll-loops -fmerge-all-constants")
 
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -fexceptions -fno-rtti -Wno-missing-braces")
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O2 -funroll-loops -fmerge-all-constants")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -funroll-loops -fmerge-all-constants")
 
     if (XMRIG_ARMv8)
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${ARM8_CXX_FLAGS}")
@@ -86,9 +86,12 @@ elseif (CMAKE_CXX_COMPILER_ID MATCHES Clang)
     endif()
 
     if (XMRIG_OS_APPLE)
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c11")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
     endif()
+
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c11")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
 
 endif()
 

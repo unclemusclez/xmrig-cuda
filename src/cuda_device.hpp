@@ -29,7 +29,11 @@
  */
 #define HIP_CHECK_KERNEL(id, ...)      \
     __VA_ARGS__;                        \
-    HIP_CHECK(id, hipGetLastError())
+    { hipError_t err = hipGetLastError(); if (err != hipSuccess) { \
+        char buf[256]; \
+        snprintf(buf, sizeof(buf), "HIP kernel error on device %d: %s", id, hipGetErrorString(err)); \
+        HIP_THROW(buf); \
+    } }
 
 #define CUDA_CHECK_KERNEL HIP_CHECK_KERNEL
 #define CUDA_CHECK HIP_CHECK

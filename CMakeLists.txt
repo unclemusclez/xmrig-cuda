@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.16)
 project(xmrig-rocm LANGUAGES C CXX HIP)
 find_package(hip REQUIRED)
 find_package(hiprtc REQUIRED)
@@ -19,51 +19,9 @@ option(WITH_ARGON2     "Enable Argon2 algorithms family" OFF) #unsupported
 option(WITH_RANDOMX  "Enable RandomX algorithms family" ON)
 option(WITH_KAWPOW   "Enable KawPow algorithms family" ON)
 
-if (WITH_CN_LITE)
-    add_definitions(/DXMRIG_ALGO_CN_LITE)
-endif()
-
-if (WITH_CN_HEAVY)
-    add_definitions(/DXMRIG_ALGO_CN_HEAVY)
-endif()
-
-if (WITH_CN_PICO)
-    add_definitions(/DXMRIG_ALGO_CN_PICO)
-endif()
-
-if (WITH_CN_FEMTO)
-    add_definitions(/DXMRIG_ALGO_CN_FEMTO)
-endif()
-
-if (WITH_RANDOMX)
-    add_definitions(/DXMRIG_ALGO_RANDOMX)
-endif()
-
-if (WITH_ARGON2)
-    add_definitions(/DXMRIG_ALGO_ARGON2)
-endif()
-
-if (WITH_KAWPOW)
-    if (WITH_HIP_DRIVER_API)
-        add_definitions(/DXMRIG_ALGO_KAWPOW)
-    else()
-        set(WITH_KAWPOW OFF)
-        message(STATUS "HIP: KawPow disabled, requires WITH_HIP_DRIVER_API=ON for HIP Driver API and HIPRTC")
-    endif()
-endif()
-
-if (WITH_CN_R)
-    if (WITH_HIP_DRIVER_API)
-        add_definitions(/DXMRIG_ALGO_CN_R)
-    else()
-        set(WITH_CN_R OFF)
-        message(STATUS "HIP: CryptoNight-R disabled, requires WITH_HIP_DRIVER_API=ON for HIP Driver API and HIPRTC")
-    endif()
-endif()
-
 
 include_directories(src)
-add_definitions(/DCUB_IGNORE_DEPRECATED_CPP_DIALECT)
+add_compile_definitions(CUB_IGNORE_DEPRECATED_CPP_DIALECT)
 
 
 include(cmake/cpu.cmake)
@@ -146,6 +104,58 @@ endif()
 add_library(${CMAKE_PROJECT_NAME} SHARED ${SOURCES})
 target_link_libraries(${CMAKE_PROJECT_NAME} hip::host hiprtc::hiprtc roc::rocblas rocrand)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE __HIP_PLATFORM_AMD__)
+
+set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
+)
+
+if (WIN32)
+    target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE --offload-arch=gfx1100 -O3)
+endif()
+
+if (WITH_CN_LITE)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE XMRIG_ALGO_CN_LITE)
+endif()
+
+if (WITH_CN_HEAVY)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE XMRIG_ALGO_CN_HEAVY)
+endif()
+
+if (WITH_CN_PICO)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE XMRIG_ALGO_CN_PICO)
+endif()
+
+if (WITH_CN_FEMTO)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE XMRIG_ALGO_CN_FEMTO)
+endif()
+
+if (WITH_RANDOMX)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE XMRIG_ALGO_RANDOMX)
+endif()
+
+if (WITH_ARGON2)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE XMRIG_ALGO_ARGON2)
+endif()
+
+if (WITH_KAWPOW)
+    if (WITH_HIP_DRIVER_API)
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE XMRIG_ALGO_KAWPOW)
+    else()
+        set(WITH_KAWPOW OFF)
+        message(STATUS "HIP: KawPow disabled, requires WITH_HIP_DRIVER_API=ON for HIP Driver API and HIPRTC")
+    endif()
+endif()
+
+if (WITH_CN_R)
+    if (WITH_HIP_DRIVER_API)
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE XMRIG_ALGO_CN_R)
+    else()
+        set(WITH_CN_R OFF)
+        message(STATUS "HIP: CryptoNight-R disabled, requires WITH_HIP_DRIVER_API=ON for HIP Driver API and HIPRTC")
+    endif()
+endif()
 
 if (XMRIG_OS_WIN)
     target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
