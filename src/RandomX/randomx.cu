@@ -33,18 +33,20 @@ void randomx_prepare(nvid_ctx *ctx, const void *dataset, size_t dataset_size, ui
     ctx->d_scratchpads_size = batch_size * (ctx->algorithm.l3() + 64);
 
     if (ctx->rx_dataset_host > 0) {
-        CUDA_CHECK(ctx->device_id, cudaHostGetDevicePointer(&ctx->d_rx_dataset, const_cast<void *>(dataset), 0));
+        void* devPtr = nullptr;
+        HIP_CHECK(ctx->device_id, hipHostGetDevicePointer(&devPtr, const_cast<void *>(dataset), 0));
+        ctx->d_rx_dataset = static_cast<uint32_t*>(devPtr);
     }
     else {
-        CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_rx_dataset, dataset_size));
-        CUDA_CHECK(ctx->device_id, cudaMemcpy(ctx->d_rx_dataset, dataset, dataset_size, cudaMemcpyHostToDevice));
+        HIP_CHECK(ctx->device_id, hipMalloc(&ctx->d_rx_dataset, dataset_size));
+        HIP_CHECK(ctx->device_id, hipMemcpy(ctx->d_rx_dataset, dataset, dataset_size, hipMemcpyHostToDevice));
     }
 
-    CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_long_state, ctx->d_scratchpads_size));
-    CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_rx_hashes, batch_size * 64));
-    CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_rx_entropy, batch_size * (128 + 2560)));
-    CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_rx_vm_states, batch_size * 2560));
-    CUDA_CHECK(ctx->device_id, cudaMalloc(&ctx->d_rx_rounding, batch_size * sizeof(uint32_t)));
+    HIP_CHECK(ctx->device_id, hipMalloc(&ctx->d_long_state, ctx->d_scratchpads_size));
+    HIP_CHECK(ctx->device_id, hipMalloc(&ctx->d_rx_hashes, batch_size * 64));
+    HIP_CHECK(ctx->device_id, hipMalloc(&ctx->d_rx_entropy, batch_size * (128 + 2560)));
+    HIP_CHECK(ctx->device_id, hipMalloc(&ctx->d_rx_vm_states, batch_size * 2560));
+    HIP_CHECK(ctx->device_id, hipMalloc(&ctx->d_rx_rounding, batch_size * sizeof(uint32_t)));
 }
 
 
@@ -54,5 +56,5 @@ void randomx_update_dataset(nvid_ctx* ctx, const void* dataset, size_t dataset_s
         return;
     }
 
-    CUDA_CHECK(ctx->device_id, cudaMemcpy(ctx->d_rx_dataset, dataset, dataset_size, cudaMemcpyHostToDevice));
+    HIP_CHECK(ctx->device_id, hipMemcpy(ctx->d_rx_dataset, dataset, dataset_size, hipMemcpyHostToDevice));
 }

@@ -98,6 +98,7 @@ endif()
 
 if (WITH_KAWPOW)
     list(APPEND SOURCES src/KawPow/raven/KawPow.cu)
+    list(APPEND SOURCES src/KawPow/raven/CudaKawPow_gen.cpp)
 endif()
 
 set_source_files_properties(
