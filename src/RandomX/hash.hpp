@@ -19,6 +19,9 @@ You should have received a copy of the GNU General Public License
 along with RandomX CUDA.  If not, see<http://www.gnu.org/licenses/>.
 */
 
+#include <cstdint>
+#include <cstdio>
+
 __global__ void find_shares(const void* hashes, uint64_t target, uint32_t* shares)
 {
     const uint32_t global_index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -28,6 +31,30 @@ __global__ void find_shares(const void* hashes, uint64_t target, uint32_t* share
         const uint32_t idx = atomicInc(shares, 0xFFFFFFFF) + 1;
         if (idx < 10) {
             shares[idx] = global_index;
+        }
+    }
+}
+
+__global__ void debug_validate_hashes(const uint64_t* hashes, uint32_t batch_size, uint64_t target,
+                                       uint32_t* total, uint32_t* valid, uint32_t* invalid_count,
+                                       uint32_t* invalid_nonces, uint32_t max_invalid)
+{
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        *total = batch_size;
+        *valid = 0;
+        *invalid_count = 0;
+
+        for (uint32_t i = 0; i < batch_size; ++i) {
+            const uint64_t* h = hashes + i * 4;
+            if (h[3] < target) {
+                (*valid)++;
+            } else {
+                uint32_t idx = *invalid_count;
+                if (idx < max_invalid) {
+                    invalid_nonces[idx] = i;
+                }
+                (*invalid_count)++;
+            }
         }
     }
 }
@@ -65,6 +92,32 @@ void hash(nvid_ctx *ctx, uint32_t nonce, uint32_t nonce_offset, uint64_t target,
 
     CUDA_CHECK(ctx->device_id, hipMemset(ctx->d_result_nonce, 0, 10 * sizeof(uint32_t)));
     CUDA_CHECK_KERNEL(ctx->device_id, find_shares<<<batch_size / 32, 32>>>(ctx->d_rx_hashes, target, ctx->d_result_nonce));
+
+    if (ctx->d_rx_debug_total) {
+        CUDA_CHECK_KERNEL(ctx->device_id, debug_validate_hashes<<<1, 1>>>(
+            (const uint64_t*)ctx->d_rx_hashes, batch_size, target,
+            ctx->d_rx_debug_total, ctx->d_rx_debug_valid,
+            ctx->d_rx_debug_invalid_count, ctx->d_rx_debug_invalid_nonces, 16));
+
+        uint32_t h_total = 0, h_valid = 0, h_invalid = 0;
+        uint32_t h_invalid_nonces[16] = {0};
+
+        CUDA_CHECK(ctx->device_id, hipMemcpy(&h_total, ctx->d_rx_debug_total, sizeof(uint32_t), hipMemcpyDeviceToHost));
+        CUDA_CHECK(ctx->device_id, hipMemcpy(&h_valid, ctx->d_rx_debug_valid, sizeof(uint32_t), hipMemcpyDeviceToHost));
+        CUDA_CHECK(ctx->device_id, hipMemcpy(&h_invalid, ctx->d_rx_debug_invalid_count, sizeof(uint32_t), hipMemcpyDeviceToHost));
+        CUDA_CHECK(ctx->device_id, hipMemcpy(h_invalid_nonces, ctx->d_rx_debug_invalid_nonces, sizeof(h_invalid_nonces), hipMemcpyDeviceToHost));
+
+        printf("[RX-DEBUG] batch=%u total=%u valid=%u invalid=%u",
+               batch_size, h_total, h_valid, h_invalid);
+        if (h_invalid > 0 && h_invalid <= 16) {
+            printf(" nonces:");
+            for (uint32_t i = 0; i < h_invalid; ++i) {
+                printf(" %u", h_invalid_nonces[i]);
+            }
+        }
+        printf("\n");
+    }
+
     CUDA_CHECK(ctx->device_id, hipDeviceSynchronize());
 
     CUDA_CHECK(ctx->device_id, hipMemcpy(resnonce, ctx->d_result_nonce, 10 * sizeof(uint32_t), hipMemcpyDeviceToHost));

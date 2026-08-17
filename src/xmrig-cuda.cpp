@@ -553,6 +553,10 @@ void release(nvid_ctx *ctx)
     hipFree(ctx->d_rx_entropy);
     hipFree(ctx->d_rx_vm_states);
     hipFree(ctx->d_rx_rounding);
+    hipFree(ctx->d_rx_debug_total);
+    hipFree(ctx->d_rx_debug_valid);
+    hipFree(ctx->d_rx_debug_invalid_count);
+    hipFree(ctx->d_rx_debug_invalid_nonces);
 
 #   ifdef WITH_KAWPOW
     hipFree(ctx->kawpow_cache);
