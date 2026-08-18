@@ -2100,10 +2100,10 @@ __device__ void inner_loop(
 }
 
 template<int WORKERS_PER_HASH, bool HIGH_PRECISION>
-__global__ void __launch_bounds__((WORKERS_PER_HASH == 16) ? 32 : 16, 16) execute_vm(void* vm_states, void* rounding, void* scratchpads, const void* dataset_ptr, uint32_t batch_size, uint32_t num_iterations, bool first, bool last)
+__global__ void __launch_bounds__(32, 16) execute_vm(void* vm_states, void* rounding, void* scratchpads, const void* dataset_ptr, uint32_t batch_size, uint32_t num_iterations, bool first, bool last)
 {
-	// 2 hashes per warp, 4 KB shared memory for VM states
-	__shared__ uint64_t vm_states_local[(VM_STATE_SIZE * 2) / sizeof(uint64_t)];
+	// 4 hashes per wavefront, 4 KB shared memory for VM states
+	__shared__ uint64_t vm_states_local[(VM_STATE_SIZE * 4) / sizeof(uint64_t)];
 
 	load_buffer(vm_states_local, vm_states);
 
