@@ -383,8 +383,8 @@ __global__ void blake2b_initial_hash_big(void* out, const void* blockTemplate, u
 	t[7] = hash[7];
 }
 
-template<uint32_t registers_len, uint32_t registers_stride, uint32_t out_len>
-__global__ void blake2b_hash_registers(void *out, const void* in)
+template<uint32_t registers_len, uint32_t registers_stride, uint32_t out_len, bool check_shares>
+__global__ void blake2b_hash_registers(void *out, const void* in, uint64_t target, uint32_t* shares)
 {
 	const uint32_t global_index = blockIdx.x * blockDim.x + threadIdx.x;
 	const uint64_t* p = ((const uint64_t*) in) + global_index * (registers_stride / sizeof(uint64_t));
@@ -392,4 +392,11 @@ __global__ void blake2b_hash_registers(void *out, const void* in)
 
 	uint64_t m[16] = { p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15] };
 	blake2b_512_process_double_block<out_len>(h, m, p, registers_len);
+
+	if (check_shares && (h[3] < target)) {
+		const uint32_t idx = atomicInc(shares, 0xFFFFFFFF) + 1;
+		if (idx < 10) {
+			shares[idx] = global_index;
+		}
+	}
 }
