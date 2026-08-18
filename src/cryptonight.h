@@ -87,10 +87,6 @@ struct nvid_ctx {
     uint32_t *d_rx_entropy              = nullptr;
     uint32_t *d_rx_vm_states            = nullptr;
     uint32_t *d_rx_rounding             = nullptr;
-    uint32_t *d_rx_debug_total          = nullptr;
-    uint32_t *d_rx_debug_valid          = nullptr;
-    uint32_t *d_rx_debug_invalid_count  = nullptr;
-    uint32_t *d_rx_debug_invalid_nonces = nullptr;
 
 #   ifdef XMRIG_ALGO_KAWPOW
     void* kawpow_cache                  = nullptr;

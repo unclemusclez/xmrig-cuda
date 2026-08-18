@@ -47,11 +47,6 @@ void randomx_prepare(nvid_ctx *ctx, const void *dataset, size_t dataset_size, ui
     HIP_CHECK(ctx->device_id, hipMalloc(&ctx->d_rx_entropy, batch_size * (128 + 2560)));
     HIP_CHECK(ctx->device_id, hipMalloc(&ctx->d_rx_vm_states, batch_size * 2560));
     HIP_CHECK(ctx->device_id, hipMalloc(&ctx->d_rx_rounding, batch_size * sizeof(uint32_t)));
-
-    HIP_CHECK(ctx->device_id, hipMalloc(&ctx->d_rx_debug_total, sizeof(uint32_t)));
-    HIP_CHECK(ctx->device_id, hipMalloc(&ctx->d_rx_debug_valid, sizeof(uint32_t)));
-    HIP_CHECK(ctx->device_id, hipMalloc(&ctx->d_rx_debug_invalid_count, sizeof(uint32_t)));
-    HIP_CHECK(ctx->device_id, hipMalloc(&ctx->d_rx_debug_invalid_nonces, 16 * sizeof(uint32_t)));
 }
 
 
