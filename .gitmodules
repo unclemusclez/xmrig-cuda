@@ -4,3 +4,15 @@
 [submodule ".reference/xmrig"]
 	path = .reference/xmrig
 	url = https://github.com/xmrig/xmrig.git
+[submodule ".reference/monero"]
+	path = .reference/monero
+	url = https://github.com/monero-project/monero.git
+[submodule ".reference/xmrig-cuda"]
+	path = .reference/xmrig-cuda
+	url = https://github.com/xmrig/xmrig-cuda.git
+[submodule ".reference/CUDA_AES"]
+	path = .reference/CUDA_AES
+	url = https://github.com/cihangirtezcan/CUDA_AES.git
+[submodule ".reference/RandomX_OpenCL"]
+	path = .reference/RandomX_OpenCL
+	url = https://github.com/SChernykh/RandomX_OpenCL.git
