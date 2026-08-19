@@ -112,7 +112,13 @@ set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
 )
 
 if (WIN32)
-    target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE --offload-arch=gfx1100 -O3)
+    # RDNA3 (gfx1100) supports 32-lane wavefronts. The RandomX kernels assume
+    # 32-lane warps (worker coordination, __launch_bounds__(32,16)), so we compile
+    # in wave32 to make that assumption valid. Without it the 32-thread blocks run
+    # as half of a 64-lane wavefront, which breaks worker coordination and cripples
+    # occupancy (final occupancy 2), causing multi-second-per-batch stalls.
+    target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE --offload-arch=gfx1100 -mno-wavefrontsize64 -O3)
+    set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} --rocm-path=C:/ROCm72")
 endif()
 
 if (WITH_CN_LITE)

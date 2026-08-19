@@ -1,4 +1,42 @@
 {
   "$schema": "https://app.kilo.ai/config.json",
-  "snapshot": false
+  "snapshot": false,
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "threshold_percent": 69
+  },
+  "experimental": {
+    "batch_tool": true,
+    "codebase_search": true,
+    "openTelemetry": true,
+    "continue_loop_on_deny": true,
+    "semantic_indexing": true,
+    "agent_manager_tool": true,
+    "native_notebook_tools": true,
+    "image_generation": false,
+    "swe_pruner": true,
+    "swe_pruner_model": "kilo/nvidia/nemotron-3-ultra-550b-a55b:free"
+  },
+  "agent": {
+    "plan": {
+    },
+    "debug": {
+    },
+    "orchestrator": {
+    },
+    "ask": {
+    },
+    "code": {
+      "model": "kilo/tencent/hy3:free"
+    },
+    "compaction": { 
+      "model":"kilo/nvidia/nemotron-3-ultra-550b-a55b:free"
+    },
+  },
+  "small_model": "unorouter/step-3.7-flash:free",
+  "subagent_model": "kilo/tencent/hy3:free",
+  "subagent_variant_overrides": {
+    "kilo/tencent/hy3:free":"High"
+  },
 }

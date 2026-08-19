@@ -1,2 +1,15 @@
-/CMakeLists.txt.user
-/build
+CMakeLists.txt.user
+build
+build_ref
+*.obj
+*.log
+tools/rx_selftest/*.exe
+tools/rx_selftest/*.txt
+tools/rx_selftest/*.*err
+tools/rx_selftest/*.*out
+gpu_*.bin
+cpu_*.bin
+tools/rx_selftest/*.inc
+tools/rx_selftest/*.bin
+.kilo/kilo.jsonc
+emul_*.bin

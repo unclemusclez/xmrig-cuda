@@ -29,5 +29,6 @@ along with RandomX CUDA.  If not, see<http://www.gnu.org/licenses/>.
 namespace RandomX_Monero {
     #include "configuration.h"
     #define fillAes4Rx4 fillAes4Rx4_v104
+    #include "RandomX/intrin_cuda.h"
     #include "RandomX/common.hpp"
 }

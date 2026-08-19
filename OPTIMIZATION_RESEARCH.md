@@ -42,6 +42,47 @@ blind.
 - Wire up `hipEvent` timing around `hash()` to get a real H/s number instead of
   inferring from kernel-launch rate.
 
+### Validation status (built and RUN — 2026-08-18)
+
+A working §0 harness exists in `tools/rx_selftest/`:
+- `build_reference.bat` builds tevador/RandomX as `build_ref/Release/randomx.lib`
+  (MSVC, `/MT`). This is the **CPU golden oracle**.
+- `build_oracle.bat` → `oracle.exe` (CPU reference hashes for a fixed seed/input).
+- `build_selftest.bat` → `selftest.exe` (hipcc; reuses the plugin's RandomX
+  kernels exactly as shipped, runs `RandomX_Monero::hash`, prints per-item hash).
+- `run_test.ps1` compares oracle vs GPU for nonces 0..31.
+
+**Result: GPU hash ≠ CPU reference.** Example, seed=32×0x00, base=bytes 0..75:
+- nonce 0 — GPU `00644f60…`, golden `53ade6a2…` (completely different).
+
+**Ruled out:**
+- bfactor collapse: restoring the upstream multi-launch loop
+  (`for j in 0..1<<bfactor`) gives the *identical* wrong hash ⇒ collapse is not
+  the bug.
+- 16- vs 32-thread `execute_vm` launch: `load_buffer` indexes the global
+  `vm_states` by **global hash index** (`blockIdx*blockDim+threadIdx)/8`, so both
+  launch configs are internally consistent ⇒ not the bug.
+
+**Root cause — FP rounding collapse (CONFIRMED in `randomx_cuda.hpp` ~L59-65):**
+all directed-rounding intrinsics are mapped to round-to-nearest:
+```c
+#define __fma_rd(a,b,c) hip_fma_rn(a,b,c)   // WRONG: should round DOWN
+#define __fma_ru(a,b,c) hip_fma_rn(a,b,c)   // WRONG: should round UP
+#define __fma_rz(a,b,c) hip_fma_rn(a,b,c)   // WRONG: should round toward ZERO
+// __ddiv_rd/ru, __dsqrt_rd/ru likewise collapsed to _rn
+```
+RandomX **requires** directed rounding (`fma_rnd<1/2/3>`, `div_rnd`, `sqrt_rnd`
+selected per `cfround`/`fprc`) for deterministic hashes. NVIDIA CUDA has real
+`__fma_rd` etc.; AMD/HIP has no hardware directed FMA, so the manual port
+shortcutted to `rn` — which breaks every hash. **Until this is fixed, no
+RandomX share can ever be valid**, which is exactly why shares were never
+validatable before.
+
+**Required fix (blocking, high effort):** emulate correctly-rounded *directed*
+FMA/div/sqrt on the GPU (double-double exact product/sum + directed round), then
+re-run `run_test.ps1` until GPU == golden. This is the gate for all §1-§10
+optimization work.
+
 ---
 
 ## 1. Kernel Launch Overhead & Fusion
