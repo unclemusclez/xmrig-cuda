@@ -172,9 +172,91 @@ inline double rx_dsqrt(double a, int mode) {
     return std::sqrt(a);
 }
 #else
-__device__ __forceinline__ double rx_fma_eft(double a, double b, double c, int mode);
-__device__ double rx_ddiv(double a, double b, int mode);
-__device__ double rx_dsqrt(double a, int mode);
+// ===== Device Directed Rounding Emulation (FMA-based exact error) =====
+
+__device__ __forceinline__ double hip_nextafter(double x, double y) {
+    if (x != x || y != y) return x + y; // isnan
+    if (x == y) return y;
+    uint64_t ux = __double_as_longlong(x);
+    if (x < y) {
+        if (x >= 0.0) ux++; else ux--;
+    } else {
+        if (x >= 0.0) ux--; else ux++;
+    }
+    return __longlong_as_double(ux);
+}
+
+__device__ __forceinline__ void fma_error(double a, double b, double c, double& hi, double& lo) {
+    hi = __fma_rn(a, b, c);
+    lo = __fma_rn(a, b, c - hi);
+}
+
+__device__ __forceinline__ void div_error(double a, double b, double& hi, double& lo) {
+    hi = a / b;
+    lo = __fma_rn(-hi, b, a);
+}
+
+__device__ __forceinline__ void sqrt_error(double x, double& hi, double& lo) {
+    hi = sqrt(x);
+    if (hi == 0.0) { lo = 0.0; return; }
+    lo = __fma_rn(-hi, hi, x);
+}
+
+__device__ __forceinline__ double rx_fma_eft(double a, double b, double c, int mode) {
+    double hi, lo;
+    fma_error(a, b, c, hi, lo);
+    if (mode == 0) return hi;
+    if (mode == 1) { if (lo > 0.0) hi = hip_nextafter(hi, __builtin_inf()); }
+    else if (mode == 2) { if (lo < 0.0) hi = hip_nextafter(hi, -__builtin_inf()); }
+    else if (mode == 3) { if ((lo > 0.0 && hi < 0.0) || (lo < 0.0 && hi > 0.0)) hi = hip_nextafter(hi, (hi > 0.0) ? -__builtin_inf() : __builtin_inf()); }
+    return hi;
+}
+
+__device__ __forceinline__ double rx_ddiv(double a, double b, int mode) {
+    double hi, lo;
+    div_error(a, b, hi, lo);
+    int error_sign = 0;
+    if (lo > 0.0) error_sign = (b > 0.0) ? 1 : -1;
+    else if (lo < 0.0) error_sign = (b > 0.0) ? -1 : 1;
+    if (mode == 0) return hi;
+    if (mode == 1) { if (error_sign > 0) hi = hip_nextafter(hi, __builtin_inf()); }
+    else if (mode == 2) { if (error_sign < 0) hi = hip_nextafter(hi, -__builtin_inf()); }
+    else if (mode == 3) { if ((error_sign > 0 && hi > 0.0) || (error_sign < 0 && hi < 0.0)) hi = hip_nextafter(hi, (hi > 0.0) ? -__builtin_inf() : __builtin_inf()); }
+    return hi;
+}
+
+__device__ __forceinline__ double rx_dsqrt(double x, int mode) {
+    double hi, lo;
+    sqrt_error(x, hi, lo);
+    if (mode == 0) return hi;
+    if (mode == 1) { if (lo > 0.0) hi = hip_nextafter(hi, __builtin_inf()); }
+    else if (mode == 2) { if (lo < 0.0) hi = hip_nextafter(hi, -__builtin_inf()); }
+    else if (mode == 3) { if ((lo > 0.0 && hi < 0.0) || (lo < 0.0 && hi > 0.0)) hi = hip_nextafter(hi, (hi > 0.0) ? -__builtin_inf() : __builtin_inf()); }
+    return hi;
+}
+
+// Static mode FMA helpers (called from template specializations)
+__device__ __forceinline__ double hip_fma_ru(double a, double b, double c) {
+    double hi, lo;
+    fma_error(a, b, c, hi, lo);
+    if (lo > 0.0) hi = hip_nextafter(hi, __builtin_inf());
+    return hi;
+}
+
+__device__ __forceinline__ double hip_fma_rd(double a, double b, double c) {
+    double hi, lo;
+    fma_error(a, b, c, hi, lo);
+    if (lo < 0.0) hi = hip_nextafter(hi, -__builtin_inf());
+    return hi;
+}
+
+__device__ __forceinline__ double hip_fma_rz(double a, double b, double c) {
+    double hi, lo;
+    fma_error(a, b, c, hi, lo);
+    if ((lo > 0.0 && hi < 0.0) || (lo < 0.0 && hi > 0.0)) hi = hip_nextafter(hi, (hi > 0.0) ? -__builtin_inf() : __builtin_inf());
+    return hi;
+}
+
 #endif
 
 HD_INLINE rx_vec_f128 rx_add_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
