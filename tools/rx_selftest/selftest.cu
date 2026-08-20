@@ -29,6 +29,40 @@ namespace RandomX_Monero {
     #include "RandomX/common.hpp"
 }
 
+// Timeout mechanism with watchdog thread
+static auto g_start_time = std::chrono::high_resolution_clock::now();
+static const int TIMEOUT_SECONDS = 300;  // 5 minutes for dataset init
+static std::thread g_watchdog_thread;
+static bool g_watchdog_running = true;
+
+static void watchdog_func() {
+    while (g_watchdog_running) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        auto now = std::chrono::high_resolution_clock::now();
+        auto elapsed = std::chrono::duration<double>(now - g_start_time).count();
+        if (elapsed > TIMEOUT_SECONDS) {
+            fprintf(stderr, "[TIMEOUT] Exceeded %d seconds - force terminating\n", TIMEOUT_SECONDS);
+            _exit(2);
+        }
+    }
+}
+
+static void start_watchdog() {
+    g_start_time = std::chrono::high_resolution_clock::now();
+    g_watchdog_running = true;
+    g_watchdog_thread = std::thread(watchdog_func);
+    g_watchdog_thread.detach();
+}
+
+static void check_timeout(const char* stage) {
+    auto now = std::chrono::high_resolution_clock::now();
+    auto elapsed = std::chrono::duration<double>(now - g_start_time).count();
+    if (elapsed > TIMEOUT_SECONDS) {
+        fprintf(stderr, "[TIMEOUT] Exceeded %d seconds at stage: %s\n", TIMEOUT_SECONDS, stage);
+        _exit(2);
+    }
+}
+
 static std::vector<uint8_t> hex2bin(const char* s)
 {
     std::vector<uint8_t> out;
@@ -48,6 +82,9 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    start_watchdog();
+    fprintf(stderr, "[selftest] Watchdog started (timeout=%ds)\n", TIMEOUT_SECONDS);
+
     auto seed = hex2bin(argv[1]);
     auto base = hex2bin(argv[2]);
     uint32_t count = (uint32_t)strtoul(argv[3], nullptr, 10);
@@ -59,20 +96,28 @@ int main(int argc, char** argv)
     randomx_cache* cache = randomx_alloc_cache(RANDOMX_FLAG_DEFAULT);
     randomx_init_cache(cache, seed.data(), seed.size());
     fprintf(stderr, "[selftest] cache ok\n");
+    check_timeout("after cache init");
+    
+    fprintf(stderr, "[selftest] Starting dataset allocation...\n");
     randomx_dataset* dataset = randomx_alloc_dataset(RANDOMX_FLAG_DEFAULT);
+    fprintf(stderr, "[selftest] Dataset allocated, starting init...\n");
     {
         unsigned long items = randomx_dataset_item_count();
+        fprintf(stderr, "[selftest] Dataset items: %lu\n", items);
         unsigned long hw = std::thread::hardware_concurrency(); if (hw < 1) hw = 1;
         unsigned long per = (items + hw - 1) / hw;
         std::vector<std::thread> ts;
         for (unsigned long t = 0; t < hw; ++t) {
             unsigned long s = t * per, e = (s + per > items) ? items : s + per;
             if (s >= e) continue;
+            fprintf(stderr, "[selftest] Thread %lu: items %lu to %lu\n", t, s, e);
             ts.emplace_back(randomx_init_dataset, dataset, cache, s, e - s);
         }
+        fprintf(stderr, "[selftest] Waiting for %zu threads to complete...\n", ts.size());
         for (auto& th : ts) th.join();
     }
     fprintf(stderr, "[selftest] dataset ok\n");
+    check_timeout("after dataset init");
     void* ds_mem = randomx_get_dataset_memory(dataset);
     size_t ds_size = (size_t)randomx_dataset_item_count() * RANDOMX_DATASET_ITEM_SIZE;
 
@@ -114,6 +159,7 @@ int main(int argc, char** argv)
         for (int i = 0; i < 8; ++i) fprintf(stderr, "%016llx ", (unsigned long long)fh[i]);
         fprintf(stderr, "\n");
     }
+    check_timeout("after firstHash");
 
     // DEBUG: dump fillAes4Rx4_v104 per-round intermediates for item 0, sub 0.
     {
@@ -130,6 +176,7 @@ int main(int argc, char** argv)
         FILE* f = fopen("gpu_fill_dbg.bin", "wb"); if (f) { fwrite(dbg.data(), 1, 32, f); fclose(f); }
         HIP_CHECK(0, hipFree(d_dbg)); HIP_CHECK(0, hipFree(d_out));
     }
+    check_timeout("after fillAes4Rx4");
 
     // DEBUG: execute_vm_dbg - run VM iterations with per-iteration state dump for item 0
     {
@@ -144,6 +191,7 @@ int main(int argc, char** argv)
         // Run fillAes4Rx4 first to populate entropy (same as hash() does)
         RandomX_Monero::fillAes4Rx4_v104<2176, false><<<ctx.rx_batch_size / 32, 32 * 4>>>(ctx.d_rx_hashes, ctx.d_rx_entropy, ctx.rx_batch_size);
         HIP_CHECK(0, hipDeviceSynchronize());
+        check_timeout("after fillAes4Rx4 for VM");
 
         // DEBUG: dump entropy buffer right after fillAes4Rx4 to verify layout
         {
@@ -161,6 +209,7 @@ int main(int argc, char** argv)
         // Run init_vm first (same as hash() does)
         RandomX_Monero::init_vm<8><<<ctx.rx_batch_size / 4, 4 * 8>>>(ctx.d_rx_entropy, ctx.d_rx_vm_states);
         HIP_CHECK(0, hipDeviceSynchronize());
+        check_timeout("after init_vm");
 
         // DEBUG: dump item 0's VM state right after init_vm (before execute_vm)
         {
@@ -199,12 +248,18 @@ int main(int argc, char** argv)
         const int effective_bfactor = 6;  // matching ctx.device_bfactor default
         const int n = 1 << effective_bfactor;
         const int num_iterations = RANDOMX_PROGRAM_ITERATIONS >> effective_bfactor;
+        fprintf(stderr, "[dbg] Running %d kernel calls with %d iterations each\n", n, num_iterations);
         for (int j = 0; j < n; ++j) {
+            fprintf(stderr, "[dbg] Starting kernel call %d...\n", j);
             RandomX_Monero::execute_vm_dbg<8, false><<<ctx.rx_batch_size / 4, 4 * 8>>>(
                 ctx.d_rx_vm_states, ctx.d_rx_rounding, ctx.d_long_state, ctx.d_rx_dataset,
                 ctx.rx_batch_size, num_iterations, j == 0, j == n - 1, d_dbg_vm, d_dbg_idx);
+            fprintf(stderr, "[dbg] Kernel call %d launched, waiting for completion...\n", j);
             HIP_CHECK(0, hipDeviceSynchronize());
+            fprintf(stderr, "[dbg] Kernel call %d completed\n", j);
+            if (j % 8 == 0) check_timeout("in execute_vm loop");
         }
+        check_timeout("after execute_vm loop");
 
         uint32_t h_dbg_idx = 0;
         HIP_CHECK(0, hipMemcpy(&h_dbg_idx, d_dbg_idx, sizeof(uint32_t), hipMemcpyDeviceToHost));

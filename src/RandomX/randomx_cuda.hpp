@@ -1327,9 +1327,6 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 
 		((uint32_t*)(R + 20))[0] = static_cast<uint32_t>(compiled_program - (uint32_t*)(R + (REGISTERS_SIZE + IMM_BUF_SIZE) / sizeof(uint64_t)));
 	}
-	if (threadIdx.x == 0 && blockIdx.x == 0) {
-		R[0] = 0xDEADBEEFCAFEBABEULL;
-	}
 }
 
 template<typename T, size_t N>
@@ -1353,8 +1350,8 @@ __device__ void load_buffer(T* dst_buf, size_t count, const void* src_buf)
 {
 	uint32_t i = threadIdx.x;
 	const uint32_t step = blockDim.x;
-	const uint8_t* src = ((const uint8_t*) src_buf) + i;
-	uint8_t* dst = ((uint8_t*) dst_buf) + i;
+	const uint8_t* src = ((const uint8_t*) src_buf) + i * sizeof(T);
+	uint8_t* dst = ((uint8_t*) dst_buf) + i * sizeof(T);
 	while (i < count)
 	{
 		*(T*)(dst) = *(T*)(src);
@@ -1516,6 +1513,11 @@ __device__ void inner_loop(
 	#pragma unroll(1)
 	for (int32_t ip = 0; ip < program_length;)
 	{
+		// Debug: print progress for first few instructions
+		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0 && ip < 5) {
+			printf("[INNER_LOOP] Starting ip=%d/%d\n", ip, program_length);
+		}
+
 		imm_buf[IMM_INDEX_COUNT] = ip;
 
 		uint32_t inst = compiled_program[ip];
@@ -1523,14 +1525,26 @@ __device__ void inner_loop(
 		const int32_t num_fp_insts = (inst >> NUM_FP_INSTS_OFFSET) & (WORKERS_PER_HASH - 1);
 		const int32_t num_insts = num_workers - num_fp_insts;
 
+		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0 && ip < 5) {
+			printf("[INNER_LOOP] ip=%d inst=%08x num_workers=%d num_fp=%d\n", ip, inst, num_workers, num_fp_insts);
+		}
+
 		if (sub < num_workers)
 		{
+			if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0 && ip < 5) {
+				printf("[INNER_LOOP] ip=%d sub=%d < num_workers=%d, executing\n", ip, sub, num_workers);
+			}
+
 			const int32_t inst_offset = sub - num_fp_insts;
 			const bool is_fp = inst_offset < num_fp_insts;
 			inst = compiled_program[ip + (is_fp ? sub2 : inst_offset)];
 
 			uint32_t opcode = (inst >> OPCODE_OFFSET) & 15;
 			const uint32_t location = (inst >> LOC_OFFSET) & 1;
+
+			if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0 && ip < 5) {
+				printf("[INNER_LOOP] ip=%d opcode=%u location=%u\n", ip, opcode, location);
+			}
 
 			const uint32_t reg_size_shift = is_fp ? 4 : 3;
 			const uint32_t reg_base_offset = is_fp ? fp_reg_offset : 0;
@@ -1667,9 +1681,9 @@ __device__ void inner_loop(
 				*dst_ptr = dst;
 			}
 
-			execution_end:
-			++ip;
+			execution_end:;
 		}
+		++ip;
 	}
 }
 
@@ -1683,18 +1697,38 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 	if (idx >= batch_size)
 		return;
 
+	// Debug: print at kernel entry
+	if (global_index == 0) {
+		printf("[KERNEL_ENTRY] execute_vm_impl started, batch_size=%u, num_iterations=%u, first=%d, last=%d\n", 
+			   batch_size, num_iterations, first, last);
+	}
+
 	const uint32_t fp_reg_offset = 64 + ((global_index & 1) << 3);
 	const uint32_t fp_reg_group_A_offset = 192 + ((global_index & 1) << 3);
 	const uint32_t IDX_WIDTH = WORKERS_PER_HASH == 16 ? 8 : 4;
 
-	// Thread-local register array - NO SHARED MEMORY
-	// Each thread gets its own copy of 256 uint64_t VM state in registers
-	uint64_t R[256];
-	load_buffer(R, VM_STATE_SIZE / sizeof(uint64_t), ((const uint64_t*) vm_states) + idx * VM_STATE_SIZE / sizeof(uint64_t));
+	// Thread-local storage for imm_buf only
+	// Access R directly from global memory to minimize register pressure
+	uint32_t imm_buf_local[IMM_BUF_SIZE / sizeof(uint32_t)];
+	
+	// Load imm_buf into thread-local storage
+	const uint64_t* vm_state_global = ((const uint64_t*) vm_states) + idx * VM_STATE_SIZE / sizeof(uint64_t);
+	const uint32_t* imm_buf_global = (const uint32_t*)vm_state_global + REGISTERS_SIZE / sizeof(uint32_t);
+	for (int i = 0; i < IMM_BUF_SIZE / sizeof(uint32_t); ++i) {
+		imm_buf_local[i] = imm_buf_global[i];
+	}
+	uint32_t* imm_buf = imm_buf_local;
+	
+	// Access R directly from global memory
+	uint64_t* R = (uint64_t*)vm_state_global;
+	uint32_t* imm_buf = imm_buf_local;
+	
+	// Access R directly from global memory
+	uint64_t* R = (uint64_t*)vm_state_global;
 
-	// DEBUG: verify load_buffer worked for thread 0
+	// DEBUG: verify load worked for thread 0
 	if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
-		printf("[DEBUG] After load_buffer: R[0]=%016llx, R[24]=%016llx\n", (unsigned long long)R[0], (unsigned long long)R[24]);
+		printf("[DEBUG] After load: R[0]=%016llx, R[24]=%016llx\n", (unsigned long long)R[0], (unsigned long long)R[24]);
 	}
 	const uint32_t* rounding_buf = (const uint32_t*) rounding;
 	uint32_t fprc = rounding_buf[idx];
@@ -1711,9 +1745,23 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 	const uint32_t addressRegisters = ((uint32_t*)(R + 16))[2];
 	const uint32_t datasetOffset = ((uint32_t*)(R + 16))[3];
 	const uint32_t program_length = ((uint32_t*)(R + 20))[0];
-	const uint32_t* compiled_program = (const uint32_t*)(R + (REGISTERS_SIZE + IMM_BUF_SIZE) / sizeof(uint64_t));
+	// Access compiled_program directly from global memory (read-only, so fast)
+	const uint32_t* compiled_program = (const uint32_t*)vm_state_global + (REGISTERS_SIZE + IMM_BUF_SIZE) / sizeof(uint32_t);
+
+	// DEBUG: verify imm_buf load
+	if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
+		printf("[DEBUG] After imm_buf load: imm_buf[0]=%08x, imm_buf[190]=%08x, imm_buf[191]=%08x\n", 
+			   imm_buf[0], imm_buf[190], imm_buf[191]);
+		printf("[DEBUG] program_length=%u, compiled_program[0]=%08x\n", program_length, compiled_program[0]);
+	}
 
 	const uint8_t* dataset = ((const uint8_t*) dataset_ptr) + datasetOffset;
+
+	// Load A registers from global memory (R[24-31]) - these are accessed less frequently
+	uint64_t A[8];
+	for (int i = 0; i < 8; ++i) {
+		A[i] = vm_state_global[24 + i];
+	}
 
 	ulonglong2 eMask = ((ulonglong2*)(R + 18))[0];
 
@@ -1742,6 +1790,10 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 	spAddr0 = static_cast<uint32_t>(*readReg0);
 	spAddr1 = static_cast<uint32_t>(*readReg1);
 
+	if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
+		printf("[GPU_EXEC] After readReg load: spAddr0=%u, spAddr1=%u\n", spAddr0, spAddr1);
+	}
+
 	TRACE_VM_STATE("ENTER", 0, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
 	// Initial scratchpad load (matching CPU execute() order: load registers BEFORE first executeBytecode)
@@ -1753,13 +1805,30 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 		spAddr0 &= ScratchpadL3Mask64;
 		spAddr1 &= ScratchpadL3Mask64;
 
+		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
+			printf("[GPU_EXEC] After spAddr update: spAddr0=%u, spAddr1=%u\n", spAddr0, spAddr1);
+		}
+
 		p0 = (uint64_t*)(scratchpad + spAddr0 + sub * 8);
 		p1 = (uint64_t*)(scratchpad + spAddr1 + sub * 8);
+
+		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
+			printf("[GPU_EXEC] Before scratchpad load: p0=%p, p1=%p\n", p0, p1);
+		}
 
 		r = R + sub;
 		*r ^= *p0;
 
+		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
+			printf("[GPU_EXEC] After first scratchpad XOR\n");
+		}
+
 		uint64_t global_mem_data = *p1;
+
+		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
+			printf("[GPU_EXEC] After p1 load: global_mem_data=%016llx\n", (unsigned long long)global_mem_data);
+		}
+
 		int32_t* q = (int32_t*)&global_mem_data;
 
 		const bool f_group = (sub < 4);
@@ -1767,13 +1836,34 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 		const uint64_t orMask1 = f_group ? 0 : eMask.x;
 		const uint64_t orMask2 = f_group ? 0 : eMask.y;
 
+		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
+			printf("[GPU_EXEC] Before load_F_E_groups: q[0]=%08x, q[1]=%08x\n", q[0], q[1]);
+		}
+
 		fe[0] = load_F_E_groups(q[0], andMask, orMask1);
+
+		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
+			printf("[GPU_EXEC] After first load_F_E_groups\n");
+		}
+
 		fe[1] = load_F_E_groups(q[1], andMask, orMask2);
+
+		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
+			printf("[GPU_EXEC] After F/E load\n");
+		}
 	}
 
 	TRACE_VM_STATE("INIT_LOOP_DONE", 0, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
-	inner_loop<WORKERS_PER_HASH, HIGH_PRECISION>(program_length, compiled_program, sub, scratchpad, fp_reg_offset, fp_reg_group_A_offset, R, (uint32_t*)(R + REGISTERS_SIZE / sizeof(uint64_t)), batch_size, fprc, xexponentMask, ((1 << WORKERS_PER_HASH) - 1) << ((threadIdx.x / IDX_WIDTH) * IDX_WIDTH));
+	if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
+		printf("[GPU_EXEC] Before first inner_loop\n");
+	}
+
+	inner_loop<WORKERS_PER_HASH, HIGH_PRECISION>(program_length, compiled_program, sub, scratchpad, fp_reg_offset, fp_reg_group_A_offset, R, imm_buf, batch_size, fprc, xexponentMask, ((1 << WORKERS_PER_HASH) - 1) << ((threadIdx.x / IDX_WIDTH) * IDX_WIDTH));
+
+	if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
+		printf("[GPU_EXEC] After first inner_loop\n");
+	}
 
 	TRACE_VM_STATE("AFTER_INIT_LOOP", 0, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
@@ -1812,7 +1902,7 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 
 		TRACE_VM_STATE("BEFORE_INNER_LOOP", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
-		inner_loop<WORKERS_PER_HASH, HIGH_PRECISION>(program_length, compiled_program, sub, scratchpad, fp_reg_offset, fp_reg_group_A_offset, R, (uint32_t*)(R + REGISTERS_SIZE / sizeof(uint64_t)), batch_size, fprc, xexponentMask, ((1 << WORKERS_PER_HASH) - 1) << ((threadIdx.x / IDX_WIDTH) * IDX_WIDTH));
+	inner_loop<WORKERS_PER_HASH, HIGH_PRECISION>(program_length, compiled_program, sub, scratchpad, fp_reg_offset, fp_reg_group_A_offset, R, imm_buf, batch_size, fprc, xexponentMask, ((1 << WORKERS_PER_HASH) - 1) << ((threadIdx.x / IDX_WIDTH) * IDX_WIDTH));
 
 		TRACE_VM_STATE("AFTER_INNER_LOOP", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
