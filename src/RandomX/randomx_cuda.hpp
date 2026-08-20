@@ -1345,10 +1345,10 @@ template<int> __device__ double fma_rnd(double a, double b, double c, uint32_t f
 template<int, bool> __device__ double div_rnd(double a, double b, uint32_t fprc);
 template<int, bool> __device__ double sqrt_rnd(double x, uint32_t fprc);
 
-// ===== Inline Device Directed Rounding Helpers =====
+// ===== Device Directed Rounding Helpers =====
 
 __device__ __forceinline__ double hip_nextafter(double x, double y) {
-    if (x != x || y != y) return x + y;
+    if (x != x || y != y) return x + y; // isnan
     if (x == y) return y;
     uint64_t ux = __double_as_longlong(x);
     if (x < y) {
@@ -1362,6 +1362,17 @@ __device__ __forceinline__ double hip_nextafter(double x, double y) {
 __device__ __forceinline__ void fma_error(double a, double b, double c, double& hi, double& lo) {
     hi = __fma_rn(a, b, c);
     lo = __fma_rn(a, b, c - hi);
+}
+
+__device__ __forceinline__ void div_error(double a, double b, double& hi, double& lo) {
+    hi = a / b;
+    lo = __fma_rn(-hi, b, a);
+}
+
+__device__ __forceinline__ void sqrt_error(double x, double& hi, double& lo) {
+    hi = sqrt(x);
+    if (hi == 0.0) { lo = 0.0; return; }
+    lo = __fma_rn(-hi, hi, x);
 }
 
 __device__ __forceinline__ double hip_fma_ru(double a, double b, double c) {
