@@ -47,11 +47,11 @@ endif()
 
 if (WITH_RANDOMX)
     list(APPEND SOURCES src/RandomX/randomx.cu)
-    list(APPEND SOURCES src/RandomX/arqma/randomx_arqma.cu)
-    list(APPEND SOURCES src/RandomX/monero/randomx_monero.cu)
-    list(APPEND SOURCES src/RandomX/wownero/randomx_wownero.cu)
-    list(APPEND SOURCES src/RandomX/graft/randomx_graft.cu)
-    list(APPEND SOURCES src/RandomX/yada/randomx_yada.cu)
+    # list(APPEND SOURCES src/RandomX/arqma/randomx_arqma.cu)
+    # list(APPEND SOURCES src/RandomX/monero/randomx_monero.cu)
+    # list(APPEND SOURCES src/RandomX/wownero/randomx_wownero.cu)
+    # list(APPEND SOURCES src/RandomX/graft/randomx_graft.cu)
+    # list(APPEND SOURCES src/RandomX/yada/randomx_yada.cu)
 endif()
 
 if (WITH_KAWPOW)
@@ -64,11 +64,11 @@ set_source_files_properties(
     src/cuda_extra.cu
     src/CryptonightR.cu
     src/RandomX/randomx.cu
-    src/RandomX/arqma/randomx_arqma.cu
-    src/RandomX/monero/randomx_monero.cu
-    src/RandomX/wownero/randomx_wownero.cu
-    src/RandomX/graft/randomx_graft.cu
-    src/RandomX/yada/randomx_yada.cu
+    # src/RandomX/arqma/randomx_arqma.cu
+    # src/RandomX/monero/randomx_monero.cu
+    # src/RandomX/wownero/randomx_wownero.cu
+    # src/RandomX/graft/randomx_graft.cu
+    # src/RandomX/yada/randomx_yada.cu
     src/KawPow/raven/KawPow.cu
     PROPERTIES LANGUAGE HIP
 )
@@ -139,6 +139,7 @@ endif()
 
 if (WITH_RANDOMX)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE XMRIG_ALGO_RANDOMX)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE RANDOMX_FREQ_CFROUND=1)
 endif()
 
 if (WITH_ARGON2)

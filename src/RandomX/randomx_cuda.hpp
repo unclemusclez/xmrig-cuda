@@ -1345,6 +1345,46 @@ template<int> __device__ double fma_rnd(double a, double b, double c, uint32_t f
 template<int, bool> __device__ double div_rnd(double a, double b, uint32_t fprc);
 template<int, bool> __device__ double sqrt_rnd(double x, uint32_t fprc);
 
+// ===== Inline Device Directed Rounding Helpers =====
+
+__device__ __forceinline__ double hip_nextafter(double x, double y) {
+    if (x != x || y != y) return x + y;
+    if (x == y) return y;
+    uint64_t ux = __double_as_longlong(x);
+    if (x < y) {
+        if (x >= 0.0) ux++; else ux--;
+    } else {
+        if (x >= 0.0) ux--; else ux++;
+    }
+    return __longlong_as_double(ux);
+}
+
+__device__ __forceinline__ void fma_error(double a, double b, double c, double& hi, double& lo) {
+    hi = __fma_rn(a, b, c);
+    lo = __fma_rn(a, b, c - hi);
+}
+
+__device__ __forceinline__ double hip_fma_ru(double a, double b, double c) {
+    double hi, lo;
+    fma_error(a, b, c, hi, lo);
+    if (lo > 0.0) hi = hip_nextafter(hi, __builtin_inf());
+    return hi;
+}
+
+__device__ __forceinline__ double hip_fma_rd(double a, double b, double c) {
+    double hi, lo;
+    fma_error(a, b, c, hi, lo);
+    if (lo < 0.0) hi = hip_nextafter(hi, -__builtin_inf());
+    return hi;
+}
+
+__device__ __forceinline__ double hip_fma_rz(double a, double b, double c) {
+    double hi, lo;
+    fma_error(a, b, c, hi, lo);
+    if ((lo > 0.0 && hi < 0.0) || (lo < 0.0 && hi > 0.0)) hi = hip_nextafter(hi, (hi > 0.0) ? -__builtin_inf() : __builtin_inf());
+    return hi;
+}
+
 template<> __device__ double fma_rnd<-1>(double a, double b, double c, uint32_t fprc)
 {
 	return __fma_rn(a, b, c);
@@ -1354,20 +1394,24 @@ template<> __device__ double div_rnd<-1, true>(double a, double b, uint32_t fprc
 {
 	if (fprc == 0)
 		return rx_ddiv(a, b, 0);
+	else if (fprc == 1)
+		return rx_ddiv(a, b, 1);
 	else if (fprc == 2)
 		return rx_ddiv(a, b, 2);
 	else
-		return rx_ddiv(a, b, 1);
+		return rx_ddiv(a, b, 3);
 }
 
 template<> __device__ double sqrt_rnd<-1, true>(double a, uint32_t fprc)
 {
 	if (fprc == 0)
 		return rx_dsqrt(a, 0);
+	else if (fprc == 1)
+		return rx_dsqrt(a, 1);
 	else if (fprc == 2)
 		return rx_dsqrt(a, 2);
 	else
-		return rx_dsqrt(a, 1);
+		return rx_dsqrt(a, 3);
 }
 
 template<> __device__ double div_rnd<-1, false>(double a, double b, uint32_t fprc)
@@ -1378,7 +1422,11 @@ template<> __device__ double div_rnd<-1, false>(double a, double b, uint32_t fpr
 	double y2 = __fma_rn(y1, __fma_rn(-b, y1, 1.0), y1);
 	const double t1 = a * y2;
 	double y3 = __fma_rn(y2, __fma_rn(-b, y2, 1.0), y2);
-	return a * y3;
+	double result = a * y3;
+	if (fprc == 0) return result;
+	if (fprc == 1) return hip_nextafter(result, __builtin_inf());
+	if (fprc == 2) return hip_nextafter(result, -__builtin_inf());
+	return hip_nextafter(result, (result > 0.0) ? -__builtin_inf() : __builtin_inf());
 }
 
 template<> __device__ double sqrt_rnd<-1, false>(double a, uint32_t fprc)
@@ -1386,23 +1434,29 @@ template<> __device__ double sqrt_rnd<-1, false>(double a, uint32_t fprc)
 	double y0 = rsqrt(a);
 	double y1 = y0 * __fma_rn(0.5, __fma_rn(-a, y0 * y0, 1.0), 1.0);
 	double y2 = y1 * __fma_rn(0.5, __fma_rn(-a, y1 * y1, 1.0), 1.0);
-	return a * y2;
+	double result = a * y2;
+	if (fprc == 0) return result;
+	if (fprc == 1) return hip_nextafter(result, __builtin_inf());
+	if (fprc == 2) return hip_nextafter(result, -__builtin_inf());
+	return hip_nextafter(result, -__builtin_inf());
 }
 
 template<> __device__ double fma_rnd<0>(double a, double b, double c, uint32_t) { return __fma_rn(a, b, c); }
-template<> __device__ double fma_rnd<1>(double a, double b, double c, uint32_t) { return __fma_rn(a, b, c); }
-template<> __device__ double fma_rnd<2>(double a, double b, double c, uint32_t) { return __fma_rn(a, b, c); }
-template<> __device__ double fma_rnd<3>(double a, double b, double c, uint32_t) { return __fma_rn(a, b, c); }
+template<> __device__ double fma_rnd<1>(double a, double b, double c, uint32_t) { return hip_fma_ru(a, b, c); }
+template<> __device__ double fma_rnd<2>(double a, double b, double c, uint32_t) { return hip_fma_rd(a, b, c); }
+template<> __device__ double fma_rnd<3>(double a, double b, double c, uint32_t) { return hip_fma_rz(a, b, c); }
 
 template<> __device__ double div_rnd<0, false>(double a, double b, uint32_t) { return rx_ddiv(a, b, 0); }
 template<> __device__ double div_rnd<0, true>(double a, double b, uint32_t) { return rx_ddiv(a, b, 0); }
 template<> __device__ double div_rnd<1, true>(double a, double b, uint32_t) { return rx_ddiv(a, b, 1); }
 template<> __device__ double div_rnd<2, true>(double a, double b, uint32_t) { return rx_ddiv(a, b, 2); }
+template<> __device__ double div_rnd<3, true>(double a, double b, uint32_t) { return rx_ddiv(a, b, 3); }
 
 template<> __device__ double sqrt_rnd<0, false>(double a, uint32_t) { return rx_dsqrt(a, 0); }
 template<> __device__ double sqrt_rnd<0, true>(double a, uint32_t) { return rx_dsqrt(a, 0); }
 template<> __device__ double sqrt_rnd<1, true>(double a, uint32_t) { return rx_dsqrt(a, 1); }
 template<> __device__ double sqrt_rnd<2, true>(double a, uint32_t) { return rx_dsqrt(a, 2); }
+template<> __device__ double sqrt_rnd<3, true>(double a, uint32_t) { return rx_dsqrt(a, 3); }
 
 #define ROUNDING_MODE (RANDOMX_FREQ_CFROUND ? -1 : 0)
 
