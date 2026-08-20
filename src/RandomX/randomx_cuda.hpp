@@ -22,6 +22,26 @@ along with RandomX CUDA.  If not, see<http://www.gnu.org/licenses/>.
 
 #include <cmath>
 
+#if defined(RX_TRACE_VM) && defined(__HIP_DEVICE_COMPILE__)
+#define TRACE_VM_STATE(tag, ip, sub, R, fprc, ma, mx, spAddr0, spAddr1) \
+    do { \
+        if (threadIdx.x == 0 && blockIdx.x == 0) { \
+            printf("[VM_TRACE] %s ip=%u sub=%u fprc=%u ma=%u mx=%u sp0=%u sp1=%u\n", \
+                   tag, ip, sub, fprc, ma, mx, spAddr0, spAddr1); \
+            for (int i = 0; i < 8; ++i) { \
+                printf("  R[%d]=%016llx\n", i, (unsigned long long)R[i]); \
+            } \
+            double* F = (double*)(R + 8); \
+            double* E = (double*)(R + 16); \
+            for (int i = 0; i < 8; ++i) { \
+                printf("  F[%d]=%016llx E[%d]=%016llx\n", i, (unsigned long long)__double_as_longlong(F[i]), i, (unsigned long long)__double_as_longlong(E[i])); \
+            } \
+        } \
+    } while (0)
+#else
+#define TRACE_VM_STATE(tag, ip, sub, R, fprc, ma, mx, spAddr0, spAddr1) do {} while (0)
+#endif
+
 __device__ __forceinline__ double hip_longlong_as_double(uint64_t x) {
     union { uint64_t u; double d; } c;
     c.u = x;
@@ -1307,6 +1327,9 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 
 		((uint32_t*)(R + 20))[0] = static_cast<uint32_t>(compiled_program - (uint32_t*)(R + (REGISTERS_SIZE + IMM_BUF_SIZE) / sizeof(uint64_t)));
 	}
+	if (threadIdx.x == 0 && blockIdx.x == 0) {
+		R[0] = 0xDEADBEEFCAFEBABEULL;
+	}
 }
 
 template<typename T, size_t N>
@@ -1314,7 +1337,7 @@ __device__ void load_buffer(T (&dst_buf)[N], const void* src_buf)
 {
 	uint32_t i = threadIdx.x * sizeof(T);
 	const uint32_t step = blockDim.x * sizeof(T);
-	const uint8_t* src = ((const uint8_t*) src_buf) + blockIdx.x * sizeof(T) * N + i;
+	const uint8_t* src = ((const uint8_t*) src_buf) + i;
 	uint8_t* dst = ((uint8_t*) dst_buf) + i;
 	while (i < sizeof(T) * N)
 	{
@@ -1330,7 +1353,7 @@ __device__ void load_buffer(T* dst_buf, size_t count, const void* src_buf)
 {
 	uint32_t i = threadIdx.x;
 	const uint32_t step = blockDim.x;
-	const uint8_t* src = ((const uint8_t*) src_buf) + blockIdx.x * count * sizeof(T) + i;
+	const uint8_t* src = ((const uint8_t*) src_buf) + i;
 	uint8_t* dst = ((uint8_t*) dst_buf) + i;
 	while (i < count)
 	{
@@ -1664,10 +1687,15 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 	const uint32_t fp_reg_group_A_offset = 192 + ((global_index & 1) << 3);
 	const uint32_t IDX_WIDTH = WORKERS_PER_HASH == 16 ? 8 : 4;
 
-	extern __shared__ uint64_t vm_states_local[];
-	uint64_t* R = vm_states_local + (threadIdx.x / IDX_WIDTH) * VM_STATE_SIZE / sizeof(uint64_t);
+	// Thread-local register array - NO SHARED MEMORY
+	// Each thread gets its own copy of 256 uint64_t VM state in registers
+	uint64_t R[256];
 	load_buffer(R, VM_STATE_SIZE / sizeof(uint64_t), ((const uint64_t*) vm_states) + idx * VM_STATE_SIZE / sizeof(uint64_t));
 
+	// DEBUG: verify load_buffer worked for thread 0
+	if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
+		printf("[DEBUG] After load_buffer: R[0]=%016llx, R[24]=%016llx\n", (unsigned long long)R[0], (unsigned long long)R[24]);
+	}
 	const uint32_t* rounding_buf = (const uint32_t*) rounding;
 	uint32_t fprc = rounding_buf[idx];
 
@@ -1698,25 +1726,62 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 	uint32_t spAddr0 = 0;
 	uint32_t spAddr1 = 0;
 
+	// Declare scratchpad pointers used in initial load and per-iteration loads
+	uint64_t *p0 = nullptr;
+	uint64_t *p1 = nullptr;
+	uint64_t *r = nullptr;
+
 	const uint64_t xexponentMask = (sub & 1) ? eMask.y : eMask.x;
+
+	// FORCE TEST PRINT - always executes
+	if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
+		printf("[GPU_EXEC] execute_vm_impl started, sub=%u, fprc=%u, R[0]=%016llx\n", sub, fprc, (unsigned long long)R[0]);
+	}
+
+	// Load initial spAddr0/spAddr1 from VM state (matching CPU execute() - always uses readReg0/1)
+	spAddr0 = static_cast<uint32_t>(*readReg0);
+	spAddr1 = static_cast<uint32_t>(*readReg1);
+
+	TRACE_VM_STATE("ENTER", 0, sub, R, fprc, ma, mx, spAddr0, spAddr1);
+
+	// Initial scratchpad load (matching CPU execute() order: load registers BEFORE first executeBytecode)
+	if ((WORKERS_PER_HASH <= 8) || (sub < 8))
+	{
+		const uint64_t spMix = *readReg0 ^ *readReg1;
+		spAddr0 ^= ((const uint32_t*)&spMix)[0];
+		spAddr1 ^= ((const uint32_t*)&spMix)[1];
+		spAddr0 &= ScratchpadL3Mask64;
+		spAddr1 &= ScratchpadL3Mask64;
+
+		p0 = (uint64_t*)(scratchpad + spAddr0 + sub * 8);
+		p1 = (uint64_t*)(scratchpad + spAddr1 + sub * 8);
+
+		r = R + sub;
+		*r ^= *p0;
+
+		uint64_t global_mem_data = *p1;
+		int32_t* q = (int32_t*)&global_mem_data;
+
+		const bool f_group = (sub < 4);
+		const uint64_t andMask = f_group ? uint64_t(-1) : randomx::dynamicMantissaMask;
+		const uint64_t orMask1 = f_group ? 0 : eMask.x;
+		const uint64_t orMask2 = f_group ? 0 : eMask.y;
+
+		fe[0] = load_F_E_groups(q[0], andMask, orMask1);
+		fe[1] = load_F_E_groups(q[1], andMask, orMask2);
+	}
+
+	TRACE_VM_STATE("INIT_LOOP_DONE", 0, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
 	inner_loop<WORKERS_PER_HASH, HIGH_PRECISION>(program_length, compiled_program, sub, scratchpad, fp_reg_offset, fp_reg_group_A_offset, R, (uint32_t*)(R + REGISTERS_SIZE / sizeof(uint64_t)), batch_size, fprc, xexponentMask, ((1 << WORKERS_PER_HASH) - 1) << ((threadIdx.x / IDX_WIDTH) * IDX_WIDTH));
 
-	if (first)
-	{
-		spAddr0 = 0;
-		spAddr1 = 0;
-	}
-	else
-	{
-		spAddr0 = static_cast<uint32_t>(*readReg0);
-		spAddr1 = static_cast<uint32_t>(*readReg1);
-	}
+	TRACE_VM_STATE("AFTER_INIT_LOOP", 0, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
 	#pragma unroll(1)
 	for (int ic = 0; ic < num_iterations; ++ic)
 	{
-		uint64_t *r, *p0, *p1;
+		TRACE_VM_STATE("ITER_START", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
+
 		if ((WORKERS_PER_HASH <= 8) || (sub < 8))
 		{
 			const uint64_t spMix = *readReg0 ^ *readReg1;
@@ -1724,6 +1789,8 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 			spAddr1 ^= ((const uint32_t*)&spMix)[1];
 			spAddr0 &= ScratchpadL3Mask64;
 			spAddr1 &= ScratchpadL3Mask64;
+
+			TRACE_VM_STATE("SPADDR_UPDATED", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
 			p0 = (uint64_t*)(scratchpad + spAddr0 + sub * 8);
 			p1 = (uint64_t*)(scratchpad + spAddr1 + sub * 8);
@@ -1743,7 +1810,11 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 			fe[1] = load_F_E_groups(q[1], andMask, orMask2);
 		}
 
+		TRACE_VM_STATE("BEFORE_INNER_LOOP", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
+
 		inner_loop<WORKERS_PER_HASH, HIGH_PRECISION>(program_length, compiled_program, sub, scratchpad, fp_reg_offset, fp_reg_group_A_offset, R, (uint32_t*)(R + REGISTERS_SIZE / sizeof(uint64_t)), batch_size, fprc, xexponentMask, ((1 << WORKERS_PER_HASH) - 1) << ((threadIdx.x / IDX_WIDTH) * IDX_WIDTH));
+
+		TRACE_VM_STATE("AFTER_INNER_LOOP", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
 		if ((WORKERS_PER_HASH <= 8) || (sub < 8))
 		{
@@ -1762,15 +1833,21 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 
 			spAddr0 = 0;
 			spAddr1 = 0;
+
+			TRACE_VM_STATE("DATASET_SWAP", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 		}
 	}
 
 	if (last)
 	{
+		// Write final register state back to global memory
 		uint64_t* p = ((uint64_t*) vm_states) + idx * VM_STATE_SIZE / sizeof(uint64_t);
+		
+		// Write R[0-7] and F/E registers
 		for (int i = 0; i < 8; ++i)
 			p[i] = R[i];
 
+		// Write XOR'd F/E and E registers
 		for (int i = 0; i < 8; ++i)
 		{
 			p[i + 8] = bit_cast<uint64_t>(F[i]) ^ bit_cast<uint64_t>(E[i]);
@@ -1799,8 +1876,9 @@ __global__ void execute_vm_dbg(void* vm_states, void* rounding, void* scratchpad
 	if (idx >= batch_size)
 		return;
 
-	extern __shared__ uint64_t vm_states_local[];
-	uint64_t* R = vm_states_local + (threadIdx.x / (WORKERS_PER_HASH == 16 ? 8 : 4)) * VM_STATE_SIZE / sizeof(uint64_t);
+	// Read final state from global memory (written by execute_vm_impl when last=true)
+	uint64_t R[24];
+	load_buffer(R, 24, ((const uint64_t*) vm_states) + idx * VM_STATE_SIZE / sizeof(uint64_t));
 
 	uint32_t old_idx = atomicAdd(dbg_idx, 1);
 	if (old_idx < 4096)
@@ -1808,8 +1886,8 @@ __global__ void execute_vm_dbg(void* vm_states, void* rounding, void* scratchpad
 		for (int i = 0; i < 8; ++i)
 			dbg[old_idx * 24 + i] = R[i];
 		for (int i = 0; i < 8; ++i)
-			dbg[old_idx * 24 + 8 + i] = bit_cast<uint64_t>(*(double*)(R + 8 + i));
+			dbg[old_idx * 24 + 8 + i] = R[8 + i];
 		for (int i = 0; i < 8; ++i)
-			dbg[old_idx * 24 + 16 + i] = bit_cast<uint64_t>(*(double*)(R + 16 + i));
+			dbg[old_idx * 24 + 16 + i] = R[16 + i];
 	}
 }
