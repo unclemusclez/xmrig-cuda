@@ -162,6 +162,17 @@ int main(int argc, char** argv)
         RandomX_Monero::init_vm<8><<<ctx.rx_batch_size / 4, 4 * 8>>>(ctx.d_rx_entropy, ctx.d_rx_vm_states);
         HIP_CHECK(0, hipDeviceSynchronize());
 
+        // DEBUG: dump item 0's VM state right after init_vm (before execute_vm)
+        {
+            std::vector<uint8_t> vm_post_init(RandomX_Monero::VM_STATE_SIZE);
+            HIP_CHECK(0, hipMemcpy(vm_post_init.data(), ctx.d_rx_vm_states, RandomX_Monero::VM_STATE_SIZE, hipMemcpyDeviceToHost));
+            FILE* f = fopen("gpu_vm_post_init.bin", "wb");
+            if (f) { fwrite(vm_post_init.data(), 1, RandomX_Monero::VM_STATE_SIZE, f); fclose(f); }
+            fprintf(stderr, "[dbg] dumped gpu_vm_post_init.bin (%zu bytes)\n", RandomX_Monero::VM_STATE_SIZE);
+            fprintf(stderr, "[dbg] vm_state0 first 32 uint64 after init_vm:\n");
+            for (int i = 0; i < 32; ++i) fprintf(stderr, "  [%02d] %016llx\n", i, (unsigned long long)((uint64_t*)vm_post_init.data())[i]);
+        }
+
         // DEBUG: dump item 0's compiled program (256 uint32 = 1024 bytes) for comparison with tevador
         {
             const size_t PROG_SIZE = 1024; // RANDOMX_PROGRAM_SIZE * 4
@@ -184,7 +195,6 @@ int main(int argc, char** argv)
             }
         }
 
-        #if 0
         // Run execute_vm_dbg for all iterations (bfactor=6 -> 32 iterations per call, 64 calls = 2048 total)
         const int effective_bfactor = 6;  // matching ctx.device_bfactor default
         const int n = 1 << effective_bfactor;
@@ -218,7 +228,6 @@ int main(int argc, char** argv)
                 fprintf(stderr, "\n");
             }
         }
-#endif
 
         HIP_CHECK(0, hipFree(d_dbg_vm)); HIP_CHECK(0, hipFree(d_dbg_idx));
     }
