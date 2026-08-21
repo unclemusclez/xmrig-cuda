@@ -40,7 +40,30 @@ void hash(nvid_ctx *ctx, uint32_t nonce, uint32_t nonce_offset, uint64_t target,
     CUDA_CHECK(ctx->device_id, hipMemset(ctx->d_result_nonce, 0, 10 * sizeof(uint32_t)));
 
     for (size_t i = 0; i < RANDOMX_PROGRAM_COUNT; ++i) {
+#ifdef RX_DEBUG_STAGE
+        {
+            CUDA_CHECK(ctx->device_id, hipDeviceSynchronize());
+            std::vector<uint8_t> ch(64);
+            CUDA_CHECK(ctx->device_id, hipMemcpy(ch.data(), ctx->d_rx_hashes, 64, hipMemcpyDeviceToHost));
+            char fn[64];
+            snprintf(fn, sizeof(fn), "gpu_chain_h%u.bin", (unsigned)i);
+            FILE* f = fopen(fn, "wb");
+            if (f) { fwrite(ch.data(), 1, 64, f); fclose(f); }
+        }
+#endif
         CUDA_CHECK_KERNEL(ctx->device_id, fillAes4Rx4<ENTROPY_SIZE, false><<<batch_size / 32, 32 * 4>>>(ctx->d_rx_hashes, ctx->d_rx_entropy, batch_size));
+
+#ifdef RX_DEBUG_STAGE
+        {
+            CUDA_CHECK(ctx->device_id, hipDeviceSynchronize());
+            std::vector<uint8_t> ent(ENTROPY_SIZE);
+            CUDA_CHECK(ctx->device_id, hipMemcpy(ent.data(), ctx->d_rx_entropy, ENTROPY_SIZE, hipMemcpyDeviceToHost));
+            char fn[64];
+            snprintf(fn, sizeof(fn), "gpu_entropy_p%u.bin", (unsigned)i);
+            FILE* f = fopen(fn, "wb");
+            if (f) { fwrite(ent.data(), 1, ENTROPY_SIZE, f); fclose(f); }
+        }
+#endif
 
 #ifdef RX_DEBUG_STAGE
         {
@@ -66,10 +89,47 @@ void hash(nvid_ctx *ctx, uint32_t nonce, uint32_t nonce_offset, uint64_t target,
 #endif
 
         CUDA_CHECK_KERNEL(ctx->device_id, init_vm<8><<<batch_size / 4, 4 * 8>>>(ctx->d_rx_entropy, ctx->d_rx_vm_states));
+#ifdef RX_DEBUG_STAGE
+        CUDA_CHECK(ctx->device_id, hipDeviceSynchronize());
+        fprintf(stderr, "[hash] program %d: init_vm done\n", (int)i);
+        {
+            std::vector<uint8_t> vms(VM_STATE_SIZE);
+            CUDA_CHECK(ctx->device_id, hipMemcpy(vms.data(), ctx->d_rx_vm_states, VM_STATE_SIZE, hipMemcpyDeviceToHost));
+            char fn[64];
+            snprintf(fn, sizeof(fn), "gpu_vmstate_p%u.bin", (unsigned)i);
+            FILE* f = fopen(fn, "wb");
+            if (f) { fwrite(vms.data(), 1, VM_STATE_SIZE, f); fclose(f); }
+            {
+                std::vector<uint8_t> sp(RANDOMX_SCRATCHPAD_L3);
+                CUDA_CHECK(ctx->device_id, hipMemcpy(sp.data(), ctx->d_long_state, RANDOMX_SCRATCHPAD_L3, hipMemcpyDeviceToHost));
+                char fn2[64];
+                snprintf(fn2, sizeof(fn2), "gpu_scratch_p%u.bin", (unsigned)i);
+                FILE* f3 = fopen(fn2, "wb");
+                if (f3) { fwrite(sp.data(), 1, RANDOMX_SCRATCHPAD_L3, f3); fclose(f3); }
+            }
+            fprintf(stderr, "[hash] dumped %s (%llu B)\n", fn, (unsigned long long)vms.size());
+        }
+#endif
         const int effective_bfactor = std::min(ctx->device_bfactor, 8);
         for (int j = 0, n = 1 << effective_bfactor; j < n; ++j) {
             CUDA_CHECK_KERNEL(ctx->device_id, execute_vm<8, false><<<batch_size / 4, 4 * 8>>>(ctx->d_rx_vm_states, ctx->d_rx_rounding, ctx->d_long_state, ctx->d_rx_dataset, batch_size, RANDOMX_PROGRAM_ITERATIONS >> effective_bfactor, j == 0, j == n - 1));
+#ifdef RX_DEBUG_STAGE
+            CUDA_CHECK(ctx->device_id, hipDeviceSynchronize());
+            if ((j & 15) == 0) fprintf(stderr, "[hash] program %d: execute_vm %d/%d done\n", (int)i, j, n);
+#endif
         }
+#ifdef RX_DEBUG_STAGE
+        fprintf(stderr, "[hash] program %d: execute_vm all done\n", (int)i);
+        {
+            std::vector<uint8_t> rf(REGISTERS_SIZE);
+            CUDA_CHECK(ctx->device_id, hipMemcpy(rf.data(), ctx->d_rx_vm_states, REGISTERS_SIZE, hipMemcpyDeviceToHost));
+            char fn[64];
+            snprintf(fn, sizeof(fn), "gpu_rf_p%u.bin", (unsigned)i);
+            FILE* f = fopen(fn, "wb");
+            if (f) { fwrite(rf.data(), 1, REGISTERS_SIZE, f); fclose(f); }
+            fprintf(stderr, "[hash] dumped %s (256 B register file)\n", fn);
+        }
+#endif
 
         if (i == RANDOMX_PROGRAM_COUNT - 1) {
             CUDA_CHECK_KERNEL(ctx->device_id, hashAes1Rx4<RANDOMX_SCRATCHPAD_L3, 192, VM_STATE_SIZE, 64><<<batch_size / 32, 32 * 4>>>(ctx->d_long_state, ctx->d_rx_vm_states, batch_size));

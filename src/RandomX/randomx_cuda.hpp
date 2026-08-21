@@ -123,7 +123,7 @@ __device__ T bit_cast(double value)
 
 __device__ double load_F_E_groups(int value, uint64_t andMask, uint64_t orMask)
 {
-	uint64_t x = static_cast<uint64_t>(static_cast<int64_t>(value));
+	uint64_t x = bit_cast<uint64_t>(__int2double_rn(value));
 	x &= andMask;
 	x |= orMask;
 	return __longlong_as_double(static_cast<int64_t>(x));
@@ -196,7 +196,7 @@ __device__ uint64_t imul_rcp_value(uint32_t divisor)
 	uint64_t quotient = p2exp63 / divisor;
 	uint64_t remainder = p2exp63 % divisor;
 
-	uint32_t bsr = 63 - __clz(divisor);
+	uint32_t bsr = 31 - __clz(divisor);
 
 	for (uint32_t shift = 0; shift <= bsr; ++shift)
 	{
@@ -369,6 +369,7 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 		int32_t first_allowed_slot_cfround = 0;
 		int32_t last_used_slot = -1;
 		int32_t last_memory_op_slot = -1;
+		int32_t last_memory_store_slot = -1;
 
 		uint32_t num_slots_used = 0;
 		uint32_t num_instructions = 0;
@@ -423,6 +424,12 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 				if (opcode < RANDOMX_FREQ_IADD_M)
 				{
 					latency = full_read_latency;
+					// A scratchpad READ must not be grouped with an earlier ISTORE:
+					// group execution performs all reads before any write, while the
+					// CPU executes the store first. Reads only need separation from
+					// the last store (read-read pairs are safe); the ISTORE branch's
+					// own constraint keeps later stores out of this read's group.
+					update_max(latency, (last_memory_store_slot + WORKERS_PER_HASH) / WORKERS_PER_HASH);
 					is_memory_op = true;
 					break;
 				}
@@ -438,6 +445,7 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 				if (opcode < RANDOMX_FREQ_ISUB_M)
 				{
 					latency = full_read_latency;
+					update_max(latency, (last_memory_store_slot + WORKERS_PER_HASH) / WORKERS_PER_HASH);
 					is_memory_op = true;
 					break;
 				}
@@ -453,6 +461,7 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 				if (opcode < RANDOMX_FREQ_IMUL_M)
 				{
 					latency = full_read_latency;
+					update_max(latency, (last_memory_store_slot + WORKERS_PER_HASH) / WORKERS_PER_HASH);
 					is_memory_op = true;
 					break;
 				}
@@ -468,6 +477,7 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 				if (opcode < RANDOMX_FREQ_IMULH_M)
 				{
 					latency = full_read_latency;
+					update_max(latency, (last_memory_store_slot + WORKERS_PER_HASH) / WORKERS_PER_HASH);
 					is_memory_op = true;
 					break;
 				}
@@ -483,6 +493,7 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 				if (opcode < RANDOMX_FREQ_ISMULH_M)
 				{
 					latency = full_read_latency;
+					update_max(latency, (last_memory_store_slot + WORKERS_PER_HASH) / WORKERS_PER_HASH);
 					is_memory_op = true;
 					break;
 				}
@@ -517,6 +528,7 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 				if (opcode < RANDOMX_FREQ_IXOR_M)
 				{
 					latency = full_read_latency;
+					update_max(latency, (last_memory_store_slot + WORKERS_PER_HASH) / WORKERS_PER_HASH);
 					is_memory_op = true;
 					break;
 				}
@@ -565,6 +577,7 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 					latency = get_byte(registerLatencyFP, dst);
 					update_max(latency, src_latency);
 					update_max(latency, ScratchpadLatency);
+					update_max(latency, (last_memory_store_slot + WORKERS_PER_HASH) / WORKERS_PER_HASH);
 					is_fp = true;
 					is_memory_op = true;
 					break;
@@ -587,6 +600,7 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 					latency = get_byte(registerLatencyFP, dst);
 					update_max(latency, src_latency);
 					update_max(latency, ScratchpadLatency);
+					update_max(latency, (last_memory_store_slot + WORKERS_PER_HASH) / WORKERS_PER_HASH);
 					is_fp = true;
 					is_memory_op = true;
 					break;
@@ -619,6 +633,7 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 					latency = get_byte(registerLatencyFP, dst);
 					update_max(latency, src_latency);
 					update_max(latency, ScratchpadLatency);
+					update_max(latency, (last_memory_store_slot + WORKERS_PER_HASH) / WORKERS_PER_HASH);
 					is_fp = true;
 					is_memory_op = true;
 					break;
@@ -786,6 +801,9 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 
 			if (is_memory_op)
 				update_max(last_memory_op_slot, slot_to_use);
+
+			if (is_memory_store)
+				update_max(last_memory_store_slot, slot_to_use);
 
 			if (is_cfround)
 			{
@@ -1381,7 +1399,20 @@ __device__ __forceinline__ double hip_nextafter(double x, double y) {
 
 __device__ __forceinline__ void fma_error(double a, double b, double c, double& hi, double& lo) {
     hi = __fma_rn(a, b, c);
-    lo = __fma_rn(a, b, c - hi);
+    if (b == 1.0) {
+        // Addition (a + c), used by FADD_R/FADD_M/FSUB_R/FSUB_M. The naive
+        // residual __fma_rn(a,1,c-hi) rounds (c-hi) and can flip the sign of the
+        // true residual (a+c)-hi when the exact result is close to hi, so the
+        // directed-rounding correction picks the wrong 1-ulp neighbour. TwoSum
+        // yields s + lo = a + c exactly with s == hi, so lo is the exact residual.
+        // (A multiply whose operand is exactly 1.0 also lands here and is exact.)
+        double s = a + c;
+        double v = s - a;
+        lo = (a - (s - v)) + (c - v);
+    } else {
+        // Product path (FMUL uses c == 0), where __fma_rn(a,b,-hi) is exact.
+        lo = __fma_rn(a, b, c - hi);
+    }
 }
 
 __device__ __forceinline__ void div_error(double a, double b, double& hi, double& lo) {
@@ -1416,9 +1447,44 @@ __device__ __forceinline__ double hip_fma_rz(double a, double b, double c) {
     return hi;
 }
 
+// Correctly-rounded directed division using an EFT residual.
+// Mode convention matches the CPU (RandomX RoundMode): 0=RN, 1=RD, 2=RU, 3=RZ.
+// hi = RN(a/b); error_sign > 0 <=> hi < exact value; error_sign < 0 <=> hi > exact.
+__device__ __forceinline__ double rx_ddiv(double a, double b, int mode) {
+    double hi, lo;
+    div_error(a, b, hi, lo);
+    int error_sign = 0;
+    if (lo > 0.0) error_sign = (b > 0.0) ? 1 : -1;
+    else if (lo < 0.0) error_sign = (b > 0.0) ? -1 : 1;
+    if (mode == 0) return hi;
+    if (mode == 1) { if (error_sign < 0) hi = hip_nextafter(hi, -__builtin_inf()); }
+    else if (mode == 2) { if (error_sign > 0) hi = hip_nextafter(hi, __builtin_inf()); }
+    else if (mode == 3) { if (error_sign < 0) hi = hip_nextafter(hi, (hi > 0.0) ? -__builtin_inf() : __builtin_inf()); }
+    return hi;
+}
+
+// Correctly-rounded directed sqrt (sqrt >= 0, so RZ == RD).
+__device__ __forceinline__ double rx_dsqrt(double x, int mode) {
+    double hi, lo;
+    sqrt_error(x, hi, lo);
+    if (mode == 0) return hi;
+    if (mode == 1) { if (lo < 0.0) hi = hip_nextafter(hi, -__builtin_inf()); }
+    else if (mode == 2) { if (lo > 0.0) hi = hip_nextafter(hi, __builtin_inf()); }
+    else if (mode == 3) { if (lo < 0.0 && hi > 0.0) hi = hip_nextafter(hi, -__builtin_inf()); }
+    return hi;
+}
+
 template<> __device__ double fma_rnd<-1>(double a, double b, double c, uint32_t fprc)
 {
-	return __fma_rn(a, b, c);
+	// fprc convention matches the CPU (RandomX RoundMode): 0=RN, 1=RD, 2=RU, 3=RZ
+	if (fprc == 0)
+		return __fma_rn(a, b, c);
+	else if (fprc == 1)
+		return hip_fma_rd(a, b, c);
+	else if (fprc == 2)
+		return hip_fma_ru(a, b, c);
+	else
+		return hip_fma_rz(a, b, c);
 }
 
 template<> __device__ double div_rnd<-1, true>(double a, double b, uint32_t fprc)
@@ -1447,34 +1513,19 @@ template<> __device__ double sqrt_rnd<-1, true>(double a, uint32_t fprc)
 
 template<> __device__ double div_rnd<-1, false>(double a, double b, uint32_t fprc)
 {
-	double y0 = 1.0 / b;
-	double y1 = __fma_rn(y0, __fma_rn(-b, y0, 1.0), y0);
-	const double t0 = a * y1;
-	double y2 = __fma_rn(y1, __fma_rn(-b, y1, 1.0), y1);
-	const double t1 = a * y2;
-	double y3 = __fma_rn(y2, __fma_rn(-b, y2, 1.0), y2);
-	double result = a * y3;
-	if (fprc == 0) return result;
-	if (fprc == 1) return hip_nextafter(result, __builtin_inf());
-	if (fprc == 2) return hip_nextafter(result, -__builtin_inf());
-	return hip_nextafter(result, (result > 0.0) ? -__builtin_inf() : __builtin_inf());
+	// Correctly-rounded directed division (bit-exact vs CPU fesetround division).
+	return rx_ddiv(a, b, fprc);
 }
 
 template<> __device__ double sqrt_rnd<-1, false>(double a, uint32_t fprc)
 {
-	double y0 = rsqrt(a);
-	double y1 = y0 * __fma_rn(0.5, __fma_rn(-a, y0 * y0, 1.0), 1.0);
-	double y2 = y1 * __fma_rn(0.5, __fma_rn(-a, y1 * y1, 1.0), 1.0);
-	double result = a * y2;
-	if (fprc == 0) return result;
-	if (fprc == 1) return hip_nextafter(result, __builtin_inf());
-	if (fprc == 2) return hip_nextafter(result, -__builtin_inf());
-	return hip_nextafter(result, -__builtin_inf());
+	// Correctly-rounded directed sqrt (bit-exact vs CPU fesetround sqrt).
+	return rx_dsqrt(a, fprc);
 }
 
 template<> __device__ double fma_rnd<0>(double a, double b, double c, uint32_t) { return __fma_rn(a, b, c); }
-template<> __device__ double fma_rnd<1>(double a, double b, double c, uint32_t) { return hip_fma_ru(a, b, c); }
-template<> __device__ double fma_rnd<2>(double a, double b, double c, uint32_t) { return hip_fma_rd(a, b, c); }
+template<> __device__ double fma_rnd<1>(double a, double b, double c, uint32_t) { return hip_fma_rd(a, b, c); }
+template<> __device__ double fma_rnd<2>(double a, double b, double c, uint32_t) { return hip_fma_ru(a, b, c); }
 template<> __device__ double fma_rnd<3>(double a, double b, double c, uint32_t) { return hip_fma_rz(a, b, c); }
 
 template<> __device__ double div_rnd<0, false>(double a, double b, uint32_t) { return rx_ddiv(a, b, 0); }
@@ -1489,7 +1540,65 @@ template<> __device__ double sqrt_rnd<1, true>(double a, uint32_t) { return rx_d
 template<> __device__ double sqrt_rnd<2, true>(double a, uint32_t) { return rx_dsqrt(a, 2); }
 template<> __device__ double sqrt_rnd<3, true>(double a, uint32_t) { return rx_dsqrt(a, 3); }
 
+#ifndef RX_TRACE_LO
+#define RX_TRACE_LO 0
+#endif
+#ifndef RX_TRACE_HI
+#define RX_TRACE_HI 40
+#endif
+
 #define ROUNDING_MODE (RANDOMX_FREQ_CFROUND ? -1 : 0)
+
+// Wave-wide memory convergence for AMD GCN/RDNA. Waits until every outstanding
+// vector/LDS memory operation of the whole wave (all lanes) has completed, so
+// values stored by one lane become visible to loads issued by the other lanes
+// afterwards. This replaces CUDA's `bar.warp.sync` for cross-lane handoff of
+// the instruction pointer and the floating-point rounding mode.
+__device__ __forceinline__ void rx_wave_sync()
+{
+#if defined(__HIP_DEVICE_COMPILE__)
+	asm volatile("s_waitcnt vmcnt(0) lgkmcnt(0)" ::: "memory");
+#endif
+}
+
+#if (defined(RX_TRACE_VM) || defined(RX_TRACE_GROUPS)) && defined(__HIP_DEVICE_COMPILE__)
+#define TRACE_RX_SYNC_BEFORE_TRACE() rx_wave_sync()
+__device__ __forceinline__ void rx_trace_group(int32_t ic, int32_t ip, uint32_t fprc, const uint64_t* R)
+{
+	if (blockIdx.x == 0 && threadIdx.x == 0)
+	{
+		printf("[GRP] ic=%d ip=%d fprc=%u %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx\n",
+			(int)ic, (int)ip, (unsigned)fprc,
+			(unsigned long long)R[0], (unsigned long long)R[1], (unsigned long long)R[2], (unsigned long long)R[3],
+			(unsigned long long)R[4], (unsigned long long)R[5], (unsigned long long)R[6], (unsigned long long)R[7]);
+		printf("[GRF] ic=%d ip=%d %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx\n",
+			(int)ic, (int)ip,
+			(unsigned long long)R[8], (unsigned long long)R[9], (unsigned long long)R[10], (unsigned long long)R[11],
+			(unsigned long long)R[12], (unsigned long long)R[13], (unsigned long long)R[14], (unsigned long long)R[15],
+			(unsigned long long)R[16], (unsigned long long)R[17], (unsigned long long)R[18], (unsigned long long)R[19],
+			(unsigned long long)R[20], (unsigned long long)R[21], (unsigned long long)R[22], (unsigned long long)R[23]);
+	}
+}
+#define RX_TRACE_GROUP(ic, ip, fprc, R) rx_trace_group(ic, ip, fprc, R)
+__device__ __forceinline__ void rx_trace_post(uint32_t iter, int32_t ic, uint32_t fprc, uint32_t sp0, uint32_t sp1, const uint64_t* R)
+{
+	if (blockIdx.x == 0 && threadIdx.x == 0 && iter >= RX_TRACE_LO && iter < RX_TRACE_HI)
+	{
+		printf("[POST] ic=%d %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx sp0=%08x sp1=%08x fprc=%u\n",
+			(int)ic,
+			(unsigned long long)R[0], (unsigned long long)R[1], (unsigned long long)R[2], (unsigned long long)R[3],
+			(unsigned long long)R[4], (unsigned long long)R[5], (unsigned long long)R[6], (unsigned long long)R[7],
+			(unsigned long long)R[8], (unsigned long long)R[9], (unsigned long long)R[10], (unsigned long long)R[11],
+			(unsigned long long)R[16], (unsigned long long)R[17], (unsigned long long)R[18], (unsigned long long)R[19],
+			sp0, sp1, (unsigned)fprc);
+	}
+}
+#define RX_TRACE_POST(iter, ic, fprc, sp0, sp1, R) rx_trace_post(iter, ic, fprc, sp0, sp1, R)
+#else
+#define TRACE_RX_SYNC_BEFORE_TRACE() do {} while (0)
+#define RX_TRACE_GROUP(ic, ip, fprc, R) do {} while (0)
+#define RX_TRACE_POST(iter, ic, fprc, sp0, sp1, R) do {} while (0)
+#endif
 
 template<int WORKERS_PER_HASH, bool HIGH_PRECISION>
 __device__ void inner_loop(
@@ -1504,20 +1613,19 @@ __device__ void inner_loop(
 	const uint32_t batch_size,
 	uint32_t& fprc,
 	const uint64_t xexponentMask,
-	const uint32_t workers_mask
+	const uint32_t workers_mask,
+	const int32_t trace_ic
 )
 {
 	const int32_t sub2 = sub >> 1;
+	const bool trc = (trace_ic == RX_TRACE_LO);                              // full group walk
+	const bool trc_entry = (trace_ic >= RX_TRACE_LO) && (trace_ic < RX_TRACE_HI); // START state only
 	imm_buf[IMM_INDEX_COUNT + 1] = fprc;
+	if (trc_entry) { rx_wave_sync(); RX_TRACE_GROUP(trace_ic, 0, fprc, R); }
 
 	#pragma unroll(1)
 	for (int32_t ip = 0; ip < program_length;)
 	{
-		// Debug: print progress for first few instructions
-		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0 && ip < 5) {
-			printf("[INNER_LOOP] Starting ip=%d/%d\n", ip, program_length);
-		}
-
 		imm_buf[IMM_INDEX_COUNT] = ip;
 
 		uint32_t inst = compiled_program[ip];
@@ -1525,26 +1633,14 @@ __device__ void inner_loop(
 		const int32_t num_fp_insts = (inst >> NUM_FP_INSTS_OFFSET) & (WORKERS_PER_HASH - 1);
 		const int32_t num_insts = num_workers - num_fp_insts;
 
-		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0 && ip < 5) {
-			printf("[INNER_LOOP] ip=%d inst=%08x num_workers=%d num_fp=%d\n", ip, inst, num_workers, num_fp_insts);
-		}
-
-		if (sub < num_workers)
+		if (sub <= num_workers)
 		{
-			if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0 && ip < 5) {
-				printf("[INNER_LOOP] ip=%d sub=%d < num_workers=%d, executing\n", ip, sub, num_workers);
-			}
-
 			const int32_t inst_offset = sub - num_fp_insts;
 			const bool is_fp = inst_offset < num_fp_insts;
 			inst = compiled_program[ip + (is_fp ? sub2 : inst_offset)];
 
 			uint32_t opcode = (inst >> OPCODE_OFFSET) & 15;
 			const uint32_t location = (inst >> LOC_OFFSET) & 1;
-
-			if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0 && ip < 5) {
-				printf("[INNER_LOOP] ip=%d opcode=%u location=%u\n", ip, opcode, location);
-			}
 
 			const uint32_t reg_size_shift = is_fp ? 4 : 3;
 			const uint32_t reg_base_offset = is_fp ? fp_reg_offset : 0;
@@ -1618,262 +1714,179 @@ __device__ void inner_loop(
 				}
 				else if (opcode == 9)
 				{
-					const bool taken = (dst & imm.x) != 0;
-					if (taken)
-						ip = imm.y;
-					else
-						++ip;
-					goto execution_end;
+					// CBRANCH: add immediate to dst, then jump if the condition bits are all zero.
+					// imm.y encodes (branch_target_slot << 5) | condition_shift.
+					dst += static_cast<int32_t>(imm.x);
+					if ((static_cast<uint32_t>(dst) & (randomx::ConditionMask << (imm.y & 31))) == 0)
+					{
+						imm_buf[IMM_INDEX_COUNT] = static_cast<uint32_t>((static_cast<int32_t>(imm.y) >> 5) - num_insts);
+					}
 				}
-				else if (opcode == 13)
+				else if (opcode == 7)
 				{
-					fprc = src & 3;
-					imm_buf[IMM_INDEX_COUNT + 1] = fprc;
-					++ip;
-					goto execution_end;
-				}
-				else if (opcode == 5)
-				{
-					dst = static_cast<uint64_t>(-static_cast<int64_t>(dst));
+					// IROR_R, IROL_R
+					const uint32_t shift1 = src & 63;
+#if RANDOMX_FREQ_IROL_R > 0
+					const uint32_t shift2 = (64 - shift1) & 63;
+					const bool is_rol = (inst & (1 << NEGATIVE_SRC_OFFSET));
+					dst = (dst >> (is_rol ? shift2 : shift1)) | (dst << (is_rol ? shift1 : shift2));
+#else
+					dst = (dst >> shift1) | (dst << ((64 - shift1) & 63));
+#endif
 				}
 				else if (opcode == 14)
 				{
-					src = __longlong_as_double(static_cast<int64_t>(src));
+					// FSQRT_R
 					dst = bit_cast<uint64_t>(sqrt_rnd<ROUNDING_MODE, HIGH_PRECISION>(__longlong_as_double(dst), fprc));
+				}
+				else if (opcode == 6)
+				{
+					// IMULH_R, IMULH_M
+					dst = __umul64hi(dst, src);
+				}
+				else if (opcode == 4)
+				{
+					// ISMULH_R, ISMULH_M
+					dst = static_cast<uint64_t>(__mul64hi(static_cast<int64_t>(dst), static_cast<int64_t>(src)));
+				}
+				else if (opcode == 11)
+				{
+					// FSWAP_R
+					dst = *(uint64_t*)((uint8_t*)(R) + (dst_offset ^ 8));
+				}
+				else if (opcode == 8)
+				{
+					// ISWAP_R
+					*src_ptr = dst;
+					dst = src;
 				}
 				else if (opcode == 15)
 				{
+					// FDIV_M
 					src = bit_cast<uint64_t>(__int2double_rn(static_cast<int32_t>(src >> ((sub & 1) * 32))));
 					src &= randomx::dynamicMantissaMask;
 					src |= xexponentMask;
 					dst = bit_cast<uint64_t>(div_rnd<ROUNDING_MODE, HIGH_PRECISION>(__longlong_as_double(dst), __longlong_as_double(src), fprc));
 				}
-				else if (opcode == 10)
+				else if (opcode == 5)
 				{
-					if (location) dst = static_cast<uint32_t>(src);
-					else dst = static_cast<uint32_t>(dst);
+					// INEG_R
+					dst = static_cast<uint64_t>(-static_cast<int64_t>(dst));
 				}
-				else if (opcode == 7)
+				// CFROUND check will be skipped and removed entirely by the compiler if ROUNDING_MODE >= 0
+				else if (ROUNDING_MODE < 0)
 				{
-					dst ^= src;
-				}
-				else if (opcode == 6)
-				{
-					src = static_cast<uint64_t>(static_cast<int64_t>(dst)) >> src;
-					dst = static_cast<uint64_t>(static_cast<int64_t>(dst)) << src;
-					dst |= src;
-				}
-				else if (opcode == 4)
-				{
-					dst = __umul64hi(dst, src);
-				}
-				else if (opcode == 11)
-				{
-					dst ^= 0x8000000000000000ULL;
-				}
-				else if (opcode == 8)
-				{
-					dst ^= src;
-					src ^= dst;
-					dst ^= src;
+					// CFROUND: rotate src right by imm_offset, new rounding mode = lowest 2 bits.
+					// dst is intentionally NOT written back.
+					imm_buf[IMM_INDEX_COUNT + 1] = ((src >> imm_offset) | (src << ((64 - imm_offset) & 63))) & 3;
+					goto execution_end;
 				}
 
 				*dst_ptr = dst;
 			}
-
-			execution_end:;
 		}
-		++ip;
+
+		execution_end:
+		{
+			// Synchronize the instruction pointer and the rounding mode across all
+			// lanes of the hash: CBRANCH/CFROUND above may have updated them from
+			// a single lane via imm_buf.
+			rx_wave_sync();
+
+			ip = imm_buf[IMM_INDEX_COUNT];
+			fprc = imm_buf[IMM_INDEX_COUNT + 1];
+
+			ip += num_insts + 1;
+
+			if (trc) RX_TRACE_GROUP(trace_ic, ip, fprc, R);
+		}
 	}
 }
 
 template<int WORKERS_PER_HASH, bool HIGH_PRECISION>
 __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpads, const void* dataset_ptr, uint32_t batch_size, uint32_t num_iterations, bool first, bool last)
 {
-	const uint32_t global_index = blockIdx.x * blockDim.x + threadIdx.x;
-	const uint32_t idx = global_index / 8;
-	const uint32_t sub = global_index % 8;
+	enum { IDX_WIDTH = (WORKERS_PER_HASH == 16) ? 16 : 8 };
+	enum { HASHES_PER_BLOCK = 32 / IDX_WIDTH };
+
+	// Stage the block's VM states in LDS. All cross-lane register traffic
+	// (R/F/E and the imm_buf ip/fprc handoff) runs through LDS: on AMD the
+	// cross-lane visibility of global-memory stores is unreliable even with
+	// s_waitcnt, while LDS writes become visible to the whole wave once
+	// lgkmcnt drains (see rx_wave_sync). The state is written back to global
+	// at the end of every kernel call, so it still survives the bfactor
+	// kernel splits.
+	__shared__ uint64_t vm_states_local[HASHES_PER_BLOCK * VM_STATE_SIZE / sizeof(uint64_t)];
+
+	load_buffer(vm_states_local, ((const uint64_t*) vm_states) + blockIdx.x * HASHES_PER_BLOCK * (VM_STATE_SIZE / sizeof(uint64_t)));
+	__syncthreads();
+
+	const int32_t global_index = blockIdx.x * blockDim.x + threadIdx.x;
+	const int32_t idx = global_index / IDX_WIDTH;
+	const int32_t sub = global_index % IDX_WIDTH;
 
 	if (idx >= batch_size)
 		return;
 
-	// Debug: print at kernel entry
-	if (global_index == 0) {
-		printf("[KERNEL_ENTRY] execute_vm_impl started, batch_size=%u, num_iterations=%u, first=%d, last=%d\n", 
-			   batch_size, num_iterations, first, last);
-	}
-
-	const uint32_t fp_reg_offset = 64 + ((global_index & 1) << 3);
-	const uint32_t fp_reg_group_A_offset = 192 + ((global_index & 1) << 3);
-	const uint32_t IDX_WIDTH = WORKERS_PER_HASH == 16 ? 8 : 4;
-
-	// Thread-local storage for imm_buf only
-	// Access R directly from global memory to minimize register pressure
-	uint32_t imm_buf_local[IMM_BUF_SIZE / sizeof(uint32_t)];
-	
-	// Load imm_buf into thread-local storage
-	const uint64_t* vm_state_global = ((const uint64_t*) vm_states) + idx * VM_STATE_SIZE / sizeof(uint64_t);
-	const uint32_t* imm_buf_global = (const uint32_t*)vm_state_global + REGISTERS_SIZE / sizeof(uint32_t);
-	for (int i = 0; i < IMM_BUF_SIZE / sizeof(uint32_t); ++i) {
-		imm_buf_local[i] = imm_buf_global[i];
-	}
-	uint32_t* imm_buf = imm_buf_local;
-	
-	// Access R directly from global memory
-	uint64_t* R = (uint64_t*)vm_state_global;
-	uint32_t* imm_buf = imm_buf_local;
-	
-	// Access R directly from global memory
-	uint64_t* R = (uint64_t*)vm_state_global;
-
-	// DEBUG: verify load worked for thread 0
-	if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
-		printf("[DEBUG] After load: R[0]=%016llx, R[24]=%016llx\n", (unsigned long long)R[0], (unsigned long long)R[24]);
-	}
-	const uint32_t* rounding_buf = (const uint32_t*) rounding;
-	uint32_t fprc = rounding_buf[idx];
-
-	uint8_t* scratchpad = ((uint8_t*) scratchpads) + idx * (RANDOMX_SCRATCHPAD_L3 + 64);
-
-	const uint64_t* readReg0 = (uint64_t*)(((uint8_t*) R) + (R[16 + sub] & 0xff));
-	const uint64_t* readReg1 = (uint64_t*)(((uint8_t*) R) + ((R[16 + sub] >> 8) & 0xff));
-	const uint32_t* readReg2 = (uint32_t*)(((uint8_t*) R) + ((R[16 + sub] >> 16) & 0xff));
-	const uint32_t* readReg3 = (uint32_t*)(((uint8_t*) R) + (R[16 + sub] >> 24));
+	uint64_t* R = vm_states_local + (threadIdx.x / IDX_WIDTH) * VM_STATE_SIZE / sizeof(uint64_t);
+	double* F = (double*)(R + 8);
+	double* E = (double*)(R + 16);
 
 	uint32_t ma = ((uint32_t*)(R + 16))[0];
 	uint32_t mx = ((uint32_t*)(R + 16))[1];
 	const uint32_t addressRegisters = ((uint32_t*)(R + 16))[2];
+	const uint64_t* readReg0 = (uint64_t*)(((uint8_t*) R) + (addressRegisters & 0xff));
+	const uint64_t* readReg1 = (uint64_t*)(((uint8_t*) R) + ((addressRegisters >> 8) & 0xff));
+	const uint32_t* readReg2 = (uint32_t*)(((uint8_t*) R) + ((addressRegisters >> 16) & 0xff));
+	const uint32_t* readReg3 = (uint32_t*)(((uint8_t*) R) + (addressRegisters >> 24));
+
 	const uint32_t datasetOffset = ((uint32_t*)(R + 16))[3];
-	const uint32_t program_length = ((uint32_t*)(R + 20))[0];
-	// Access compiled_program directly from global memory (read-only, so fast)
-	const uint32_t* compiled_program = (const uint32_t*)vm_state_global + (REGISTERS_SIZE + IMM_BUF_SIZE) / sizeof(uint32_t);
-
-	// DEBUG: verify imm_buf load
-	if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
-		printf("[DEBUG] After imm_buf load: imm_buf[0]=%08x, imm_buf[190]=%08x, imm_buf[191]=%08x\n", 
-			   imm_buf[0], imm_buf[190], imm_buf[191]);
-		printf("[DEBUG] program_length=%u, compiled_program[0]=%08x\n", program_length, compiled_program[0]);
-	}
-
 	const uint8_t* dataset = ((const uint8_t*) dataset_ptr) + datasetOffset;
 
-	// Load A registers from global memory (R[24-31]) - these are accessed less frequently
-	uint64_t A[8];
-	for (int i = 0; i < 8; ++i) {
-		A[i] = vm_state_global[24 + i];
-	}
+	const uint32_t fp_reg_offset = 64 + ((global_index & 1) << 3);
+	const uint32_t fp_reg_group_A_offset = 192 + ((global_index & 1) << 3);
 
 	ulonglong2 eMask = ((ulonglong2*)(R + 18))[0];
 
-	double* F = (double*)(R + 8);
-	double* E = (double*)(R + 16);
+	const uint32_t program_length = ((uint32_t*)(R + 20))[0];
+	uint32_t fprc = ((uint32_t*) rounding)[idx];
+
+	// CPU execute() starts each call with spAddr = {mx, ma}. Across bfactor
+	// splits only the very first launch starts from {mx, ma}; every following
+	// launch continues from 0 because the previous launch ended with both
+	// scratchpad addresses reset to 0.
+	uint32_t spAddr0 = first ? mx : 0;
+	uint32_t spAddr1 = first ? ma : 0;
+
+	uint8_t* scratchpad = ((uint8_t*) scratchpads) + idx * static_cast<uint64_t>(RANDOMX_SCRATCHPAD_L3 + 64);
+
+	const bool f_group = (sub < 4);
+	double* fe = f_group ? (F + sub * 2) : (E + (sub - 4) * 2);
 	double* f = F + sub;
 	double* e = E + sub;
-	double* fe = (sub < 4) ? (F + sub * 2) : (E + (sub - 4) * 2);
 
-	uint32_t spAddr0 = 0;
-	uint32_t spAddr1 = 0;
-
-	// Declare scratchpad pointers used in initial load and per-iteration loads
-	uint64_t *p0 = nullptr;
-	uint64_t *p1 = nullptr;
-	uint64_t *r = nullptr;
-
+	const uint64_t andMask = f_group ? uint64_t(-1) : randomx::dynamicMantissaMask;
+	const uint64_t orMask1 = f_group ? 0 : eMask.x;
+	const uint64_t orMask2 = f_group ? 0 : eMask.y;
 	const uint64_t xexponentMask = (sub & 1) ? eMask.y : eMask.x;
 
-	// FORCE TEST PRINT - always executes
-	if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
-		printf("[GPU_EXEC] execute_vm_impl started, sub=%u, fprc=%u, R[0]=%016llx\n", sub, fprc, (unsigned long long)R[0]);
-	}
+	uint32_t* imm_buf = (uint32_t*)(R + REGISTERS_SIZE / sizeof(uint64_t));
+	const uint32_t* compiled_program = (const uint32_t*)(R + (REGISTERS_SIZE + IMM_BUF_SIZE) / sizeof(uint64_t));
 
-	// Load initial spAddr0/spAddr1 from VM state (matching CPU execute() - always uses readReg0/1)
-	spAddr0 = static_cast<uint32_t>(*readReg0);
-	spAddr1 = static_cast<uint32_t>(*readReg1);
-
-	if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
-		printf("[GPU_EXEC] After readReg load: spAddr0=%u, spAddr1=%u\n", spAddr0, spAddr1);
-	}
+	const uint32_t workers_mask = ((1 << WORKERS_PER_HASH) - 1) << ((threadIdx.x / IDX_WIDTH) * IDX_WIDTH);
 
 	TRACE_VM_STATE("ENTER", 0, sub, R, fprc, ma, mx, spAddr0, spAddr1);
-
-	// Initial scratchpad load (matching CPU execute() order: load registers BEFORE first executeBytecode)
-	if ((WORKERS_PER_HASH <= 8) || (sub < 8))
-	{
-		const uint64_t spMix = *readReg0 ^ *readReg1;
-		spAddr0 ^= ((const uint32_t*)&spMix)[0];
-		spAddr1 ^= ((const uint32_t*)&spMix)[1];
-		spAddr0 &= ScratchpadL3Mask64;
-		spAddr1 &= ScratchpadL3Mask64;
-
-		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
-			printf("[GPU_EXEC] After spAddr update: spAddr0=%u, spAddr1=%u\n", spAddr0, spAddr1);
-		}
-
-		p0 = (uint64_t*)(scratchpad + spAddr0 + sub * 8);
-		p1 = (uint64_t*)(scratchpad + spAddr1 + sub * 8);
-
-		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
-			printf("[GPU_EXEC] Before scratchpad load: p0=%p, p1=%p\n", p0, p1);
-		}
-
-		r = R + sub;
-		*r ^= *p0;
-
-		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
-			printf("[GPU_EXEC] After first scratchpad XOR\n");
-		}
-
-		uint64_t global_mem_data = *p1;
-
-		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
-			printf("[GPU_EXEC] After p1 load: global_mem_data=%016llx\n", (unsigned long long)global_mem_data);
-		}
-
-		int32_t* q = (int32_t*)&global_mem_data;
-
-		const bool f_group = (sub < 4);
-		const uint64_t andMask = f_group ? uint64_t(-1) : randomx::dynamicMantissaMask;
-		const uint64_t orMask1 = f_group ? 0 : eMask.x;
-		const uint64_t orMask2 = f_group ? 0 : eMask.y;
-
-		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
-			printf("[GPU_EXEC] Before load_F_E_groups: q[0]=%08x, q[1]=%08x\n", q[0], q[1]);
-		}
-
-		fe[0] = load_F_E_groups(q[0], andMask, orMask1);
-
-		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
-			printf("[GPU_EXEC] After first load_F_E_groups\n");
-		}
-
-		fe[1] = load_F_E_groups(q[1], andMask, orMask2);
-
-		if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
-			printf("[GPU_EXEC] After F/E load\n");
-		}
-	}
-
-	TRACE_VM_STATE("INIT_LOOP_DONE", 0, sub, R, fprc, ma, mx, spAddr0, spAddr1);
-
-	if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
-		printf("[GPU_EXEC] Before first inner_loop\n");
-	}
-
-	inner_loop<WORKERS_PER_HASH, HIGH_PRECISION>(program_length, compiled_program, sub, scratchpad, fp_reg_offset, fp_reg_group_A_offset, R, imm_buf, batch_size, fprc, xexponentMask, ((1 << WORKERS_PER_HASH) - 1) << ((threadIdx.x / IDX_WIDTH) * IDX_WIDTH));
-
-	if (threadIdx.x == 0 && blockIdx.x == 0 && sub == 0) {
-		printf("[GPU_EXEC] After first inner_loop\n");
-	}
-
-	TRACE_VM_STATE("AFTER_INIT_LOOP", 0, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
 	#pragma unroll(1)
 	for (int ic = 0; ic < num_iterations; ++ic)
 	{
-		TRACE_VM_STATE("ITER_START", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
-
+		uint64_t *r, *p0, *p1;
 		if ((WORKERS_PER_HASH <= 8) || (sub < 8))
 		{
+			// Make the previous iteration's stores (other lanes' registers,
+			// scratchpad and imm_buf updates) visible before reading them.
+			rx_wave_sync();
+
 			const uint64_t spMix = *readReg0 ^ *readReg1;
 			spAddr0 ^= ((const uint32_t*)&spMix)[0];
 			spAddr1 ^= ((const uint32_t*)&spMix)[1];
@@ -1891,23 +1904,24 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 			uint64_t global_mem_data = *p1;
 			int32_t* q = (int32_t*)&global_mem_data;
 
-			const bool f_group = (sub < 4);
-			const uint64_t andMask = f_group ? uint64_t(-1) : randomx::dynamicMantissaMask;
-			const uint64_t orMask1 = f_group ? 0 : eMask.x;
-			const uint64_t orMask2 = f_group ? 0 : eMask.y;
-
 			fe[0] = load_F_E_groups(q[0], andMask, orMask1);
 			fe[1] = load_F_E_groups(q[1], andMask, orMask2);
 		}
 
+		TRACE_RX_SYNC_BEFORE_TRACE();
 		TRACE_VM_STATE("BEFORE_INNER_LOOP", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
-	inner_loop<WORKERS_PER_HASH, HIGH_PRECISION>(program_length, compiled_program, sub, scratchpad, fp_reg_offset, fp_reg_group_A_offset, R, imm_buf, batch_size, fprc, xexponentMask, ((1 << WORKERS_PER_HASH) - 1) << ((threadIdx.x / IDX_WIDTH) * IDX_WIDTH));
+		if ((WORKERS_PER_HASH == IDX_WIDTH) || (sub < WORKERS_PER_HASH))
+			inner_loop<WORKERS_PER_HASH, HIGH_PRECISION>(program_length, compiled_program, sub, scratchpad, fp_reg_offset, fp_reg_group_A_offset, R, imm_buf, batch_size, fprc, xexponentMask, workers_mask, ic);
 
 		TRACE_VM_STATE("AFTER_INNER_LOOP", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
 		if ((WORKERS_PER_HASH <= 8) || (sub < 8))
 		{
+			// All lanes wrote their registers during inner_loop; wait wave-wide
+			// before cross-lane reads of readReg2/readReg3 below.
+			rx_wave_sync();
+
 			mx ^= *readReg2 ^ *readReg3;
 			mx &= CacheLineAlignMask;
 
@@ -1924,38 +1938,52 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 			spAddr0 = 0;
 			spAddr1 = 0;
 
-			TRACE_VM_STATE("DATASET_SWAP", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
+		TRACE_RX_SYNC_BEFORE_TRACE();
+		TRACE_VM_STATE("DATASET_SWAP", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
+		RX_TRACE_POST(ic, ic, fprc, spAddr0, spAddr1, R);
 		}
 	}
 
+	// Drain wave-wide LDS stores so the writeback reads the final register
+	// file of all lanes (F[sub]/E[sub] may have been written by other lanes).
+	rx_wave_sync();
+
+	if ((WORKERS_PER_HASH > 8) && (sub >= 8))
+		return;
+
+	uint64_t* p = ((uint64_t*) vm_states) + idx * (VM_STATE_SIZE / sizeof(uint64_t));
+	p[sub] = R[sub];
+
+	if (sub == 0)
+		((uint32_t*) rounding)[idx] = fprc;
+
 	if (last)
 	{
-		// Write final register state back to global memory
-		uint64_t* p = ((uint64_t*) vm_states) + idx * VM_STATE_SIZE / sizeof(uint64_t);
-		
-		// Write R[0-7] and F/E registers
-		for (int i = 0; i < 8; ++i)
-			p[i] = R[i];
-
-		// Write XOR'd F/E and E registers
-		for (int i = 0; i < 8; ++i)
-		{
-			p[i + 8] = bit_cast<uint64_t>(F[i]) ^ bit_cast<uint64_t>(E[i]);
-			p[i + 16] = bit_cast<uint64_t>(E[i]);
-		}
-		for (int i = 0; i < 8; ++i)
-			p[i + 24] = bit_cast<uint64_t>(*(double*)(R + 24 + i));
+		p[sub +  8] = bit_cast<uint64_t>(F[sub]) ^ bit_cast<uint64_t>(E[sub]);
+		p[sub + 16] = bit_cast<uint64_t>(E[sub]);
+	}
+	else if (sub == 0)
+	{
+		// Persist the control block for the next bfactor launch. With the LDS
+		// staging only ma/mx can actually differ from the init_vm values kept
+		// in global memory; the remaining fields are rewritten for parity.
+		((uint32_t*)(p + 16))[0] = ma;
+		((uint32_t*)(p + 16))[1] = mx;
+		((uint32_t*)(p + 16))[2] = addressRegisters;
+		((uint32_t*)(p + 16))[3] = datasetOffset;
+		((ulonglong2*)(p + 18))[0] = eMask;
+		((uint32_t*)(p + 20))[0] = program_length;
 	}
 }
 
 template<int WORKERS_PER_HASH, bool HIGH_PRECISION>
-__global__ void execute_vm(void* vm_states, void* rounding, void* scratchpads, const void* dataset_ptr, uint32_t batch_size, uint32_t num_iterations, bool first, bool last)
+__global__ void __launch_bounds__(WORKERS_PER_HASH == 16 ? 32 : 32, 8) execute_vm(void* vm_states, void* rounding, void* scratchpads, const void* dataset_ptr, uint32_t batch_size, uint32_t num_iterations, bool first, bool last)
 {
 	execute_vm_impl<WORKERS_PER_HASH, HIGH_PRECISION>(vm_states, rounding, scratchpads, dataset_ptr, batch_size, num_iterations, first, last);
 }
 
 template<int WORKERS_PER_HASH, bool HIGH_PRECISION>
-__global__ void execute_vm_dbg(void* vm_states, void* rounding, void* scratchpads, const void* dataset_ptr, uint32_t batch_size, uint32_t num_iterations, bool first, bool last, uint64_t* dbg, uint32_t* dbg_idx)
+__global__ void __launch_bounds__(WORKERS_PER_HASH == 16 ? 32 : 32, 8) execute_vm_dbg(void* vm_states, void* rounding, void* scratchpads, const void* dataset_ptr, uint32_t batch_size, uint32_t num_iterations, bool first, bool last, uint64_t* dbg, uint32_t* dbg_idx)
 {
 	execute_vm_impl<WORKERS_PER_HASH, HIGH_PRECISION>(vm_states, rounding, scratchpads, dataset_ptr, batch_size, num_iterations, first, last);
 

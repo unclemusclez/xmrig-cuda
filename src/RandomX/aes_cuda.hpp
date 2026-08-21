@@ -606,6 +606,12 @@ __global__ void fillAes1Rx4(void* state, void* out, uint32_t batch_size)
 		x[2] = y[2];
 		x[3] = y[3];
 	}
+
+	// Write the final chain state back into `state` (matches the CPU
+	// fillAes1Rx4, which stores the evolved state after the fill). The next
+	// stage (fillAes4Rx4) uses this evolved state as the program entropy seed,
+	// exactly like tevador's randomx_calculate_hash flow.
+	*(uint4*)(s) = *(uint4*)(x);
 }
 
 template<uint64_t outputSize, bool strided>

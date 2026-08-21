@@ -52,7 +52,7 @@ __global__ void round_kernel(const double* a, const double* b, const double* c,
                               double* out_sqrt, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
-    out_fma[i]  = RandomX_Monero::rx_fma_rnd(a[i], b[i], c[i], mode[i]);
+    out_fma[i]  = RandomX_Monero::fma_rnd<-1>(a[i], b[i], c[i], (uint32_t)mode[i]);
     out_div[i]  = RandomX_Monero::rx_ddiv(a[i], b[i], mode[i]);
     out_sqrt[i] = RandomX_Monero::rx_dsqrt(a[i] >= 0.0 ? a[i] : 0.0, mode[i]);
 }

@@ -38,14 +38,14 @@ static std::vector<uint8_t> hex2bin(const char* s)
 }
 
 // Mirror blake2b_initial_hash nonce embedding in blake2b_cuda.hpp EXACTLY. m[4] is
-// bytes 32..39 (LE); `m[4] &= (uint64_t(-1) >> 8)` clears byte 32 (bits 0..7), then
-// `| (nonce << 56)` sets byte 39. m[5] is bytes 40..47; `m[5] &= (uint64_t(-1) << 24)`
-// clears bytes 40..42, then `| (nonce >> 8)` loads bytes 40..42 with nonce>>8..24.
-// Bytes 33..38 and 43+ keep their base values. This is the canonical RandomX/Monero
-// nonce location and matches the (pristine) CUDA reference, so GPU and CPU are apples-to-apples.
+// bytes 32..39 (LE); `m[4] &= (uint64_t(-1) >> 8)` keeps the low 56 bits (bytes 32..38)
+// and clears byte 39, then `| (nonce << 56)` sets byte 39 = nonce&0xFF. m[5] is bytes
+// 40..47; `m[5] &= (uint64_t(-1) << 24)` clears bytes 40..42, then `| (nonce >> 8)`
+// loads bytes 40..42 with nonce>>8..24. Bytes 32..38 and 43+ keep their base values
+// (byte 32 is NOT cleared). Matches the pristine CUDA reference (verified: GPU first
+// hash == reference blake2b with byte 32 preserved), so GPU and CPU are apples-to-apples.
 static void embed_nonce(std::vector<uint8_t>& in, uint32_t nonce)
 {
-    in[32] = 0;                                   // byte 32 cleared by GPU mask
     in[39] = (uint8_t)(nonce & 0xFF);
     in[40] = (uint8_t)((nonce >> 8) & 0xFF);
     in[41] = (uint8_t)((nonce >> 16) & 0xFF);

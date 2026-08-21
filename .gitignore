@@ -13,3 +13,10 @@ tools/rx_selftest/*.inc
 tools/rx_selftest/*.bin
 .kilo/kilo.jsonc
 emul_*.bin
+*.exe
+*.out
+*.err
+build_ref_notrace
+*diff*.txt
+.gitignore
+
