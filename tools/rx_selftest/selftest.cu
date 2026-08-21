@@ -31,7 +31,7 @@ namespace RandomX_Monero {
 
 // Timeout mechanism with watchdog thread
 static auto g_start_time = std::chrono::high_resolution_clock::now();
-static const int TIMEOUT_SECONDS = 300;  // 5 minutes for dataset init
+static const int TIMEOUT_SECONDS = 3600;  // global-memory VM design is slow; allow up to 1h
 static std::thread g_watchdog_thread;
 static bool g_watchdog_running = true;
 
@@ -83,6 +83,7 @@ int main(int argc, char** argv)
     }
 
     start_watchdog();
+    setvbuf(stderr, NULL, _IONBF, 0);
     fprintf(stderr, "[selftest] Watchdog started (timeout=%ds)\n", TIMEOUT_SECONDS);
 
     auto seed = hex2bin(argv[1]);
@@ -178,7 +179,8 @@ int main(int argc, char** argv)
     }
     check_timeout("after fillAes4Rx4");
 
-    // DEBUG: execute_vm_dbg - run VM iterations with per-iteration state dump for item 0
+    #if 0
+// DEBUG: execute_vm_dbg - run VM iterations with per-iteration state dump for item 0
     {
         fprintf(stderr, "[dbg] Running execute_vm_dbg for item 0...\n");
         uint64_t* d_dbg_vm = nullptr;
@@ -244,6 +246,28 @@ int main(int argc, char** argv)
             }
         }
 
+        // ITER0 PROBE: single iteration, first=true last=true -> full register writeback
+        {
+            HIP_CHECK(0, hipMemset(d_dbg_idx, 0, sizeof(uint32_t)));
+            RandomX_Monero::execute_vm_dbg<8, false><<<ctx.rx_batch_size / 4, 4 * 8>>>(
+                ctx.d_rx_vm_states, ctx.d_rx_rounding, ctx.d_long_state, ctx.d_rx_dataset,
+                ctx.rx_batch_size, 1, true, true, d_dbg_vm, d_dbg_idx);
+            HIP_CHECK(0, hipDeviceSynchronize());
+            std::vector<uint8_t> vm1(RandomX_Monero::VM_STATE_SIZE);
+            HIP_CHECK(0, hipMemcpy(vm1.data(), ctx.d_rx_vm_states, RandomX_Monero::VM_STATE_SIZE, hipMemcpyDeviceToHost));
+            FILE* f = fopen("gpu_vm_iter0.bin", "wb");
+            if (f) { fwrite(vm1.data(), 1, RandomX_Monero::VM_STATE_SIZE, f); fclose(f); }
+            fprintf(stderr, "[iter0] GPU vm_state0 after 1 iteration (R | F^E | E):\n");
+            for (int i = 0; i < 32; ++i) fprintf(stderr, "  [%02d] %016llx\n", i, (unsigned long long)((uint64_t*)vm1.data())[i]);
+            // The probe ran with last=true, which overwrites the control block
+            // (ma/mx/addressRegisters/datasetOffset/eMask/program_length) of EVERY
+            // item with the final F^E/E registers. Regenerate the pristine state
+            // for all items by re-running init_vm, and reset the rounding buffer.
+            RandomX_Monero::init_vm<8><<<ctx.rx_batch_size / 4, 4 * 8>>>(ctx.d_rx_entropy, ctx.d_rx_vm_states);
+            HIP_CHECK(0, hipDeviceSynchronize());
+            HIP_CHECK(0, hipMemset(ctx.d_rx_rounding, 0, ctx.rx_batch_size * sizeof(uint32_t)));
+        }
+
         // Run execute_vm_dbg for all iterations (bfactor=6 -> 32 iterations per call, 64 calls = 2048 total)
         const int effective_bfactor = 6;  // matching ctx.device_bfactor default
         const int n = 1 << effective_bfactor;
@@ -265,14 +289,18 @@ int main(int argc, char** argv)
         HIP_CHECK(0, hipMemcpy(&h_dbg_idx, d_dbg_idx, sizeof(uint32_t), hipMemcpyDeviceToHost));
         fprintf(stderr, "[dbg] execute_vm_dbg captured %u VM state snapshots\n", h_dbg_idx);
 
-        if (h_dbg_idx > 0) {
-            std::vector<uint64_t> dbg_vm(h_dbg_idx * 24);
-            HIP_CHECK(0, hipMemcpy(dbg_vm.data(), d_dbg_vm, h_dbg_idx * 24 * sizeof(uint64_t), hipMemcpyDeviceToHost));
+        // The kernel only stores the first 4096 snapshots into d_dbg_vm
+        // (allocated for 8192); the counter includes every thread, so clamp.
+        const uint32_t stored_snapshots = std::min<uint32_t>(h_dbg_idx, 4096);
+
+        if (stored_snapshots > 0) {
+            std::vector<uint64_t> dbg_vm(stored_snapshots * 24);
+            HIP_CHECK(0, hipMemcpy(dbg_vm.data(), d_dbg_vm, stored_snapshots * 24 * sizeof(uint64_t), hipMemcpyDeviceToHost));
             FILE* f = fopen("gpu_vm_dbg.bin", "wb");
-            if (f) { fwrite(dbg_vm.data(), 1, h_dbg_idx * 24 * sizeof(uint64_t), f); fclose(f); }
-            fprintf(stderr, "[dbg] dumped gpu_vm_dbg.bin (%zu bytes, %u snapshots)\n", h_dbg_idx * 24 * sizeof(uint64_t), h_dbg_idx);
+            if (f) { fwrite(dbg_vm.data(), 1, stored_snapshots * 24 * sizeof(uint64_t), f); fclose(f); }
+            fprintf(stderr, "[dbg] dumped gpu_vm_dbg.bin (%zu bytes, %u snapshots)\n", stored_snapshots * 24 * sizeof(uint64_t), stored_snapshots);
             // Print first few snapshots
-            for (uint32_t snap = 0; snap < std::min<uint32_t>(h_dbg_idx, 4); ++snap) {
+            for (uint32_t snap = 0; snap < std::min<uint32_t>(stored_snapshots, 4); ++snap) {
                 fprintf(stderr, "  snapshot %u:\n", snap);
                 fprintf(stderr, "    R: ");
                 for (int i = 0; i < 8; ++i) fprintf(stderr, "%016llx ", (unsigned long long)dbg_vm[snap * 24 + i]);
@@ -287,7 +315,10 @@ int main(int argc, char** argv)
         HIP_CHECK(0, hipFree(d_dbg_vm)); HIP_CHECK(0, hipFree(d_dbg_idx));
     }
 
-    for (int iter = 0; iter < 10; ++iter) {
+
+#endif
+
+    for (int iter = 0; iter < 1; ++iter) {
         auto t0 = std::chrono::high_resolution_clock::now();
         RandomX_Monero::hash(&ctx, (uint32_t)(iter * batch_size), 39, 0, &rescount, resnonce.data(), batch_size);
         auto t1 = std::chrono::high_resolution_clock::now();

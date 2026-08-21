@@ -188,7 +188,17 @@ __device__ __forceinline__ double hip_nextafter(double x, double y) {
 
 __device__ __forceinline__ void fma_error(double a, double b, double c, double& hi, double& lo) {
     hi = __fma_rn(a, b, c);
-    lo = __fma_rn(a, b, c - hi);
+    if (b == 1.0) {
+        // Addition (a + c): TwoSum gives s + lo = a + c exactly with s == hi, so
+        // lo is the exact residual. The naive __fma_rn(a,1,c-hi) rounds (c-hi) and
+        // can flip the residual's sign, breaking directed rounding for FADD/FSUB.
+        double s = a + c;
+        double v = s - a;
+        lo = (a - (s - v)) + (c - v);
+    } else {
+        // Product path (FMUL uses c == 0), where __fma_rn(a,b,-hi) is exact.
+        lo = __fma_rn(a, b, c - hi);
+    }
 }
 
 __device__ __forceinline__ void div_error(double a, double b, double& hi, double& lo) {
@@ -206,34 +216,17 @@ __device__ __forceinline__ double rx_fma_eft(double a, double b, double c, int m
     double hi, lo;
     fma_error(a, b, c, hi, lo);
     if (mode == 0) return hi;
-    if (mode == 1) { if (lo > 0.0) hi = hip_nextafter(hi, __builtin_inf()); }
-    else if (mode == 2) { if (lo < 0.0) hi = hip_nextafter(hi, -__builtin_inf()); }
-    else if (mode == 3) { if ((lo > 0.0 && hi < 0.0) || (lo < 0.0 && hi > 0.0)) hi = hip_nextafter(hi, (hi > 0.0) ? -__builtin_inf() : __builtin_inf()); }
+    // mode convention: 0=RN, 1=RD, 2=RU, 3=RZ
+    if (mode == 1) { if (lo < 0.0) hi = hip_nextafter(hi, -__builtin_inf()); }
+    else if (mode == 2) { if (lo > 0.0) hi = hip_nextafter(hi, __builtin_inf()); }
+    else if (mode == 3) { if ((lo > 0.0 && hi < 0.0)) hi = hip_nextafter(hi, __builtin_inf());
+                          else if ((lo < 0.0 && hi > 0.0)) hi = hip_nextafter(hi, -__builtin_inf()); }
     return hi;
 }
 
-__device__ __forceinline__ double rx_ddiv(double a, double b, int mode) {
-    double hi, lo;
-    div_error(a, b, hi, lo);
-    int error_sign = 0;
-    if (lo > 0.0) error_sign = (b > 0.0) ? 1 : -1;
-    else if (lo < 0.0) error_sign = (b > 0.0) ? -1 : 1;
-    if (mode == 0) return hi;
-    if (mode == 1) { if (error_sign > 0) hi = hip_nextafter(hi, __builtin_inf()); }
-    else if (mode == 2) { if (error_sign < 0) hi = hip_nextafter(hi, -__builtin_inf()); }
-    else if (mode == 3) { if ((error_sign > 0 && hi > 0.0) || (error_sign < 0 && hi < 0.0)) hi = hip_nextafter(hi, (hi > 0.0) ? -__builtin_inf() : __builtin_inf()); }
-    return hi;
-}
-
-__device__ __forceinline__ double rx_dsqrt(double x, int mode) {
-    double hi, lo;
-    sqrt_error(x, hi, lo);
-    if (mode == 0) return hi;
-    if (mode == 1) { if (lo > 0.0) hi = hip_nextafter(hi, __builtin_inf()); }
-    else if (mode == 2) { if (lo < 0.0) hi = hip_nextafter(hi, -__builtin_inf()); }
-    else if (mode == 3) { if ((lo > 0.0 && hi < 0.0) || (lo < 0.0 && hi > 0.0)) hi = hip_nextafter(hi, (hi > 0.0) ? -__builtin_inf() : __builtin_inf()); }
-    return hi;
-}
+// NOTE: rx_ddiv / rx_dsqrt (correctly-rounded directed division/sqrt) are defined
+// in randomx_cuda.hpp (after the hip_fma helpers) so every TU compiling the
+// rounding templates sees the definitions.
 
 // Static mode FMA helpers (called from template specializations)
 __device__ __forceinline__ double hip_fma_ru(double a, double b, double c) {

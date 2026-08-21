@@ -1,0 +1,181 @@
+[2026-08-21 12:54:52.667]  nvidia   use profile  rx  (1 thread) scratchpad 2048 KB
+|  # | GPU |  BUS ID | INTENSITY | THREADS | BLOCKS | BF |  BS | MEMORY | NAME
+|  0 |   0 | 03:00.0 |      3600 |       8 |    450 |  2 |   0 |   7200 | AMD Radeon RX 7900 XT
+[2026-08-21 12:54:52.671]  nvidia   READY threads 1/1 (0 ms)
+[2026-08-21 12:55:00.578]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (13 tx)
+[2026-08-21 12:55:10.778]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (17 tx)
+[2026-08-21 12:55:15.543]  config   "C:\Users\musclez\Downloads\xmrig-6.26.0-windows-x64\xmrig-6.26.0\config.json" was changed, reloading configuration
+[2026-08-21 12:55:17.530]  nvidia   stopped (1987 ms)
+[2026-08-21 12:55:17.530]  nvidia   use profile  rx  (1 thread) scratchpad 2048 KB
+|  # | GPU |  BUS ID | INTENSITY | THREADS | BLOCKS | BF |  BS | MEMORY | NAME
+|  0 |   0 | 03:00.0 |      7200 |       8 |    900 |  2 |   0 |  14400 | AMD Radeon RX 7900 XT
+[2026-08-21 12:55:17.530]  nvidia   READY threads 1/1 (0 ms)
+[2026-08-21 12:55:20.833]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (22 tx)
+[2026-08-21 12:55:30.852]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (24 tx)
+[2026-08-21 12:55:41.104]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (26 tx)
+[2026-08-21 12:55:50.976]  config   "C:\Users\musclez\Downloads\xmrig-6.26.0-windows-x64\xmrig-6.26.0\config.json" was changed, reloading configuration
+[2026-08-21 12:55:54.828]  nvidia   stopped (3851 ms)
+[2026-08-21 12:55:54.828]  nvidia   use profile  rx  (1 thread) scratchpad 2048 KB
+|  # | GPU |  BUS ID | INTENSITY | THREADS | BLOCKS | BF |  BS | MEMORY | NAME
+|  0 |   0 | 03:00.0 |      7200 |       8 |    900 |  3 |   0 |  14400 | AMD Radeon RX 7900 XT
+[2026-08-21 12:55:54.828]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (32 tx)
+[2026-08-21 12:55:54.829]  nvidia   READY threads 1/1 (1 ms)
+[2026-08-21 12:55:59.394]  nvidia   #0 03:00.0   0W  0C
+[2026-08-21 12:55:59.394]  miner    speed 10s/60s/15m n/a n/a n/a H/s max 1182.4 H/s
+[2026-08-21 12:56:01.365]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (34 tx)
+[2026-08-21 12:56:12.696]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (35 tx)
+[2026-08-21 12:56:14.615]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (36 tx)
+[2026-08-21 12:56:15.393]  config   "C:\Users\musclez\Downloads\xmrig-6.26.0-windows-x64\xmrig-6.26.0\config.json" was changed, reloading configuration
+[2026-08-21 12:56:20.018]  nvidia   stopped (4624 ms)
+[2026-08-21 12:56:20.018]  nvidia   use profile  rx  (1 thread) scratchpad 2048 KB
+|  # | GPU |  BUS ID | INTENSITY | THREADS | BLOCKS | BF |  BS | MEMORY | NAME
+|  0 |   0 | 03:00.0 |      7200 |       8 |    900 |  8 |   0 |  14400 | AMD Radeon RX 7900 XT
+[2026-08-21 12:56:20.018]  nvidia   READY threads 1/1 (0 ms)
+[2026-08-21 12:56:24.684]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (37 tx)
+[2026-08-21 12:56:44.680]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (38 tx)
+[2026-08-21 12:56:54.654]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (39 tx)
+[2026-08-21 12:57:04.692]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (41 tx)
+[2026-08-21 12:57:05.261]  nvidia   #0 03:00.0   0W  0C
+[2026-08-21 12:57:05.261]  miner    speed 10s/60s/15m 1149.4 n/a n/a H/s max 1182.5 H/s
+[2026-08-21 12:57:14.860]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (49 tx)
+[2026-08-21 12:57:26.377]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (50 tx)
+[2026-08-21 12:57:29.188]  config   "C:\Users\musclez\Downloads\xmrig-6.26.0-windows-x64\xmrig-6.26.0\config.json" was changed, reloading configuration
+[2026-08-21 12:57:29.710]  nvidia   stopped (522 ms)
+[2026-08-21 12:57:29.710]  nvidia   use profile  rx  (1 thread) scratchpad 2048 KB
+|  # | GPU |  BUS ID | INTENSITY | THREADS | BLOCKS | BF |  BS | MEMORY | NAME
+|  0 |   0 | 03:00.0 |      7200 |       4 |   1800 |  8 |   0 |  14400 | AMD Radeon RX 7900 XT
+[2026-08-21 12:57:29.711]  nvidia   READY threads 1/1 (0 ms)
+[2026-08-21 12:57:36.426]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (53 tx)
+[2026-08-21 12:57:46.605]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (57 tx)
+[2026-08-21 12:57:56.735]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (60 tx)
+[2026-08-21 12:58:06.994]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (66 tx)
+[2026-08-21 12:58:07.058]  nvidia   #0 03:00.0   0W  0C
+[2026-08-21 12:58:07.058]  miner    speed 10s/60s/15m 1132.1 n/a n/a H/s max 1182.5 H/s
+[2026-08-21 12:58:07.058]  config   "C:\Users\musclez\Downloads\xmrig-6.26.0-windows-x64\xmrig-6.26.0\config.json" was changed, reloading configuration
+[2026-08-21 12:58:08.570]  nvidia   stopped (1511 ms)
+[2026-08-21 12:58:08.570]  nvidia   use profile  rx  (1 thread) scratchpad 2048 KB
+|  # | GPU |  BUS ID | INTENSITY | THREADS | BLOCKS | BF |  BS | MEMORY | NAME
+|  0 |   0 | 03:00.0 |      7200 |      16 |    450 |  8 |   0 |  14400 | AMD Radeon RX 7900 XT
+[2026-08-21 12:58:08.570]  nvidia   READY threads 1/1 (1 ms)
+[2026-08-21 12:58:14.574]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (67 tx)
+[2026-08-21 12:58:17.178]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (68 tx)
+[2026-08-21 12:58:27.344]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (70 tx)
+[2026-08-21 12:58:37.493]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (73 tx)
+[2026-08-21 12:58:47.655]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (76 tx)
+[2026-08-21 12:58:57.997]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (77 tx)
+[2026-08-21 12:59:08.314]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (82 tx)
+[2026-08-21 12:59:09.587]  nvidia   #0 03:00.0   0W  0C
+[2026-08-21 12:59:09.587]  miner    speed 10s/60s/15m 1150.0 n/a n/a H/s max 1182.5 H/s
+[2026-08-21 12:59:18.488]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745147 (84 tx)
+[2026-08-21 12:59:23.402]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (1 tx)
+[2026-08-21 12:59:33.414]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (7 tx)
+[2026-08-21 12:59:41.624]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (8 tx)
+[2026-08-21 12:59:42.314]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (12 tx)
+[2026-08-21 12:59:42.940]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (13 tx)
+[2026-08-21 12:59:44.322]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (14 tx)
+[2026-08-21 12:59:46.221]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (15 tx)
+[2026-08-21 12:59:56.263]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (18 tx)
+[2026-08-21 13:00:06.392]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (23 tx)
+[2026-08-21 13:00:10.884]  nvidia   #0 03:00.0   0W  0C
+[2026-08-21 13:00:10.884]  miner    speed 10s/60s/15m 1151.5 1146.3 n/a H/s max 1182.5 H/s
+[2026-08-21 13:00:16.511]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (30 tx)
+[2026-08-21 13:00:26.528]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (34 tx)
+[2026-08-21 13:00:36.534]  config   "C:\Users\musclez\Downloads\xmrig-6.26.0-windows-x64\xmrig-6.26.0\config.json" was changed, reloading configuration
+[2026-08-21 13:00:40.467]  nvidia   stopped (3932 ms)
+[2026-08-21 13:00:40.467]  nvidia   use profile  rx  (1 thread) scratchpad 2048 KB
+|  # | GPU |  BUS ID | INTENSITY | THREADS | BLOCKS | BF |  BS | MEMORY | NAME
+|  0 |   0 | 03:00.0 |      7200 |      32 |    225 |  8 |   0 |  14400 | AMD Radeon RX 7900 XT
+[2026-08-21 13:00:40.467]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (40 tx)
+[2026-08-21 13:00:40.467]  nvidia   READY threads 1/1 (0 ms)
+[2026-08-21 13:00:46.657]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (43 tx)
+[2026-08-21 13:00:56.707]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (48 tx)
+[2026-08-21 13:01:06.789]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (50 tx)
+[2026-08-21 13:01:12.683]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (53 tx)
+[2026-08-21 13:01:15.714]  nvidia   #0 03:00.0   0W  0C
+[2026-08-21 13:01:15.715]  miner    speed 10s/60s/15m 1145.5 n/a n/a H/s max 1182.5 H/s
+[2026-08-21 13:01:16.906]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (55 tx)
+[2026-08-21 13:01:26.935]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (59 tx)
+[2026-08-21 13:01:36.983]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (63 tx)
+[2026-08-21 13:01:47.093]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (64 tx)
+[2026-08-21 13:01:57.116]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (69 tx)
+[2026-08-21 13:02:07.169]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (72 tx)
+[2026-08-21 13:02:16.985]  nvidia   #0 03:00.0   0W  0C
+[2026-08-21 13:02:16.985]  miner    speed 10s/60s/15m 1151.5 1149.4 n/a H/s max 1182.5 H/s
+[2026-08-21 13:02:17.262]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (76 tx)
+[2026-08-21 13:02:27.314]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (77 tx)
+[2026-08-21 13:02:37.386]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (84 tx)
+[2026-08-21 13:02:46.939]  nvidia   accepted (1/0) diff 1000K (110 ms)
+[2026-08-21 13:02:47.553]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (92 tx)
+[2026-08-21 13:02:57.644]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (101 tx)
+[2026-08-21 13:03:07.662]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (106 tx)
+[2026-08-21 13:03:11.210]  config   "C:\Users\musclez\Downloads\xmrig-6.26.0-windows-x64\xmrig-6.26.0\config.json" was changed, reloading configuration
+[2026-08-21 13:03:12.710]  nvidia   stopped (1499 ms)
+[2026-08-21 13:03:12.710]  nvidia   use profile  rx  (1 thread) scratchpad 2048 KB
+|  # | GPU |  BUS ID | INTENSITY | THREADS | BLOCKS | BF |  BS | MEMORY | NAME
+|  0 |   0 | 03:00.0 |      7040 |      64 |    110 |  8 |   0 |  14080 | AMD Radeon RX 7900 XT
+[2026-08-21 13:03:12.710]  nvidia   READY threads 1/1 (0 ms)
+[2026-08-21 13:03:14.551]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (111 tx)
+[2026-08-21 13:03:17.760]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745148 (116 tx)
+[2026-08-21 13:03:19.724]  nvidia   #0 03:00.0   0W  0C
+[2026-08-21 13:03:19.724]  miner    speed 10s/60s/15m n/a n/a n/a H/s max 1182.5 H/s
+[2026-08-21 13:03:22.380]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (3 tx)
+[2026-08-21 13:03:32.663]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (7 tx)
+[2026-08-21 13:03:42.739]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (8 tx)
+[2026-08-21 13:03:52.952]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (10 tx)
+[2026-08-21 13:04:02.983]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (16 tx)
+[2026-08-21 13:04:13.046]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (21 tx)
+[2026-08-21 13:04:21.024]  nvidia   #0 03:00.0   0W  0C
+[2026-08-21 13:04:21.024]  miner    speed 10s/60s/15m 1217.0 n/a n/a H/s max 1226.7 H/s
+[2026-08-21 13:04:23.259]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (33 tx)
+[2026-08-21 13:04:33.375]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (34 tx)
+[2026-08-21 13:04:41.592]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (39 tx)
+[2026-08-21 13:04:42.310]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (40 tx)
+[2026-08-21 13:04:42.934]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (41 tx)
+[2026-08-21 13:04:56.867]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (42 tx)
+[2026-08-21 13:04:58.174]  nvidia   accepted (2/0) diff 1000K (109 ms)
+[2026-08-21 13:05:06.875]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (47 tx)
+[2026-08-21 13:05:17.094]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (48 tx)
+[2026-08-21 13:05:22.314]  nvidia   #0 03:00.0   0W  0C
+[2026-08-21 13:05:22.314]  miner    speed 10s/60s/15m 1218.2 1211.6 n/a H/s max 1226.7 H/s
+[2026-08-21 13:05:27.154]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (50 tx)
+[2026-08-21 13:05:37.330]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (53 tx)
+[2026-08-21 13:05:47.414]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (54 tx)
+[2026-08-21 13:05:49.222]  config   "C:\Users\musclez\Downloads\xmrig-6.26.0-windows-x64\xmrig-6.26.0\config.json" was changed, reloading configuration
+[2026-08-21 13:05:51.045]  nvidia   stopped (1822 ms)
+[2026-08-21 13:05:51.045]  nvidia   use profile  rx  (1 thread) scratchpad 2048 KB
+|  # | GPU |  BUS ID | INTENSITY | THREADS | BLOCKS | BF |  BS | MEMORY | NAME
+|  0 |   0 | 03:00.0 |      2048 |      32 |     64 |  8 |   0 |   4096 | AMD Radeon RX 7900 XT
+[2026-08-21 13:05:51.046]  nvidia   READY threads 1/1 (0 ms)
+[2026-08-21 13:05:57.494]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (56 tx)
+[2026-08-21 13:06:07.571]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745149 (59 tx)
+[2026-08-21 13:06:08.799]  config   "C:\Users\musclez\Downloads\xmrig-6.26.0-windows-x64\xmrig-6.26.0\config.json" was changed, reloading configuration
+[2026-08-21 13:06:10.029]  nvidia   stopped (1230 ms)
+[2026-08-21 13:06:10.030]  nvidia   use profile  rx  (1 thread) scratchpad 2048 KB
+|  # | GPU |  BUS ID | INTENSITY | THREADS | BLOCKS | BF |  BS | MEMORY | NAME
+|  0 |   0 | 03:00.0 |      4096 |      64 |     64 |  8 |   0 |   8192 | AMD Radeon RX 7900 XT
+[2026-08-21 13:06:10.030]  nvidia   READY threads 1/1 (0 ms)
+[2026-08-21 13:06:14.934]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745150 (1 tx)
+[2026-08-21 13:06:19.009]  config   "C:\Users\musclez\Downloads\xmrig-6.26.0-windows-x64\xmrig-6.26.0\config.json" was changed, reloading configuration
+[2026-08-21 13:06:22.143]  nvidia   stopped (3133 ms)
+[2026-08-21 13:06:22.143]  nvidia   use profile  rx  (1 thread) scratchpad 2048 KB
+|  # | GPU |  BUS ID | INTENSITY | THREADS | BLOCKS | BF |  BS | MEMORY | NAME
+|  0 |   0 | 03:00.0 |      8192 |     128 |     64 |  8 |   0 |  16384 | AMD Radeon RX 7900 XT
+[2026-08-21 13:06:22.144]  nvidia   READY threads 1/1 (1 ms)
+[2026-08-21 13:06:24.984]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745150 (6 tx)
+[2026-08-21 13:06:29.609]  nvidia   #0 03:00.0   0W  0C
+[2026-08-21 13:06:29.609]  miner    speed 10s/60s/15m n/a n/a n/a H/s max 1226.7 H/s
+[2026-08-21 13:06:30.510]  config   "C:\Users\musclez\Downloads\xmrig-6.26.0-windows-x64\xmrig-6.26.0\config.json" was changed, reloading configuration
+[2026-08-21 13:06:31.684]  nvidia   stopped (1174 ms)
+[2026-08-21 13:06:31.684]  nvidia   use profile  rx  (1 thread) scratchpad 2048 KB
+|  # | GPU |  BUS ID | INTENSITY | THREADS | BLOCKS | BF |  BS | MEMORY | NAME
+|  0 |   0 | 03:00.0 |      7168 |     128 |     56 |  8 |   0 |  14336 | AMD Radeon RX 7900 XT
+[2026-08-21 13:06:31.685]  nvidia   READY threads 1/1 (0 ms)
+[2026-08-21 13:06:35.366]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745150 (10 tx)
+[2026-08-21 13:06:45.450]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745150 (11 tx)
+[2026-08-21 13:06:55.429]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745150 (13 tx)
+[2026-08-21 13:07:05.641]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745150 (17 tx)
+[2026-08-21 13:07:15.739]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745150 (21 tx)
+[2026-08-21 13:07:25.768]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745150 (25 tx)
+[2026-08-21 13:07:31.982]  nvidia   #0 03:00.0   0W  0C
+[2026-08-21 13:07:31.982]  miner    speed 10s/60s/15m 1147.6 n/a n/a H/s max 1226.7 H/s
+[2026-08-21 13:07:35.765]  net      new job from donate.v2.xmrig.com:3333 diff 1000K algo rx/0 height 3745150 (28 tx)
