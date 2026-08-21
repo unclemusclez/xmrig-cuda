@@ -110,7 +110,7 @@ void hash(nvid_ctx *ctx, uint32_t nonce, uint32_t nonce_offset, uint64_t target,
             fprintf(stderr, "[hash] dumped %s (%llu B)\n", fn, (unsigned long long)vms.size());
         }
 #endif
-        const int effective_bfactor = std::min(ctx->device_bfactor, 8);
+        const int effective_bfactor = std::min(ctx->device_bfactor, 11);
         for (int j = 0, n = 1 << effective_bfactor; j < n; ++j) {
             CUDA_CHECK_KERNEL(ctx->device_id, execute_vm<8, false><<<batch_size / 4, 4 * 8>>>(ctx->d_rx_vm_states, ctx->d_rx_rounding, ctx->d_long_state, ctx->d_rx_dataset, batch_size, RANDOMX_PROGRAM_ITERATIONS >> effective_bfactor, j == 0, j == n - 1));
 #ifdef RX_DEBUG_STAGE
