@@ -2,7 +2,7 @@
 #define ETHASH_DATASET_PARENTS 512
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIP__)
-#define SHFL(x, y, z) __shfl_sync(0xFFFFFFFFULL, (x), (y), (z))
+#define SHFL(x, y, z) __shfl((x), (y), (z))
 #elif defined(__CUDACC__)
 #define SHFL(x, y, z) __shfl_sync(0xFFFFFFFFULL, (x), (y), (z))
 #else
