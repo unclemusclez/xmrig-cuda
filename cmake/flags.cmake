@@ -10,7 +10,7 @@ if ("${CMAKE_BUILD_TYPE}" STREQUAL "")
 endif()
 
 if (CMAKE_BUILD_TYPE STREQUAL "Release")
-    add_definitions(/DNDEBUG)
+    add_definitions(-DNDEBUG)
 endif()
 
 include(CheckSymbolExists)
@@ -32,7 +32,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES GNU)
         set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -maes")
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -maes")
 
-        add_definitions(/DHAVE_ROTR)
+        add_definitions(-DHAVE_ROTR)
     endif()
 
     if (WIN32)
@@ -45,21 +45,21 @@ if (CMAKE_CXX_COMPILER_ID MATCHES GNU)
         set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++")
     endif()
 
-    add_definitions(/D_GNU_SOURCE)
+    add_definitions(-D_GNU_SOURCE)
 
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c11")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
 
-    add_definitions(/DHAVE_BUILTIN_CLEAR_CACHE)
+    add_definitions(-DHAVE_BUILTIN_CLEAR_CACHE)
 
 elseif (CMAKE_CXX_COMPILER_ID MATCHES MSVC)
 
-    set(CMAKE_C_FLAGS_RELEASE "/MP /MT /O2 /Ob2 /DNDEBUG")
-    set(CMAKE_CXX_FLAGS_RELEASE "/MP /MT /O2 /Ob2 /DNDEBUG")
-    add_definitions(/D_CRT_SECURE_NO_WARNINGS)
-    add_definitions(/D_CRT_NONSTDC_NO_WARNINGS)
-    add_definitions(/DNOMINMAX)
-    add_definitions(/DHAVE_ROTR)
+    set(CMAKE_C_FLAGS_RELEASE "/MP /MT /O2 /Ob2 -DNDEBUG")
+    set(CMAKE_CXX_FLAGS_RELEASE "/MP /MT /O2 /Ob2 -DNDEBUG")
+    add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+    add_definitions(-D_CRT_NONSTDC_NO_WARNINGS)
+    add_definitions(-DNOMINMAX)
+    add_definitions(-DHAVE_ROTR)
 
 elseif (CMAKE_CXX_COMPILER_ID MATCHES Clang)
 
@@ -81,7 +81,7 @@ elseif (CMAKE_CXX_COMPILER_ID MATCHES Clang)
 
         check_symbol_exists("_rotr" "x86intrin.h" HAVE_ROTR)
         if (HAVE_ROTR)
-            add_definitions(/DHAVE_ROTR)
+            add_definitions(-DHAVE_ROTR)
         endif()
     endif()
 
@@ -98,6 +98,6 @@ endif()
 if (NOT WIN32)
     check_symbol_exists("__builtin___clear_cache" "stdlib.h" HAVE_BUILTIN_CLEAR_CACHE)
     if (HAVE_BUILTIN_CLEAR_CACHE)
-        add_definitions(/DHAVE_BUILTIN_CLEAR_CACHE)
+        add_definitions(-DHAVE_BUILTIN_CLEAR_CACHE)
     endif()
 endif()

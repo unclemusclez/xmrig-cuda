@@ -544,7 +544,10 @@ int cuda_get_deviceinfo(nvid_ctx *ctx)
         return 1;
     }
 
-    ctx->device_name            = _strdup(props.name);
+    size_t name_len             = strlen(props.name) + 1;
+    char *device_name           = new char[name_len];
+    memcpy(device_name, props.name, name_len);
+    ctx->device_name            = device_name;
     ctx->device_mpcount         = props.multiProcessorCount;
     ctx->device_arch[0]         = props.major;
     ctx->device_arch[1]         = props.minor;

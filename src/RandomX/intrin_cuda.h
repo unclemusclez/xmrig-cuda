@@ -5,7 +5,11 @@
 #pragma once
 
 #ifndef FORCE_INLINE
-#define FORCE_INLINE __forceinline
+#   if defined(_MSC_VER)
+#       define FORCE_INLINE __forceinline
+#   else
+#       define FORCE_INLINE inline __attribute__((always_inline))
+#   endif
 #endif
 
 #if defined(__HIP_DEVICE_COMPILE__)
