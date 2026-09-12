@@ -1,0 +1,106 @@
+diff --git a/src/bytecode_machine.hpp b/src/bytecode_machine.hpp
+index aa6454b..abfbf07 100644
+--- a/src/bytecode_machine.hpp
++++ b/src/bytecode_machine.hpp
+@@ -33,6 +33,31 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ #include "instruction.hpp"
+ #include "program.hpp"
+ 
++#if defined(RX_TRACE_VM) && !defined(RX_TRACE_ITER_ONLY)
++#include <cstdio>
++#include <cstring>
++namespace randomx { extern bool rxTraceOn; }
++#define CPU_TRACE_VM_STATE(tag, pc, nreg, config, flags) \
++    do { if (::randomx::rxTraceOn) { \
++        fprintf(stderr, "[CPU_TRACE] %s pc=%d\n", tag, pc); \
++        for (int i = 0; i < 8; ++i) { \
++            fprintf(stderr, "  R[%d]=%016llx\n", i, (unsigned long long)nreg.r[i]); \
++        } \
++        for (int i = 0; i < 4; ++i) { \
++            uint64_t f_lo, f_hi, e_lo, e_hi; \
++            double* f_ptr = (double*)&nreg.f[i]; \
++            double* e_ptr = (double*)&nreg.e[i]; \
++            std::memcpy(&f_lo, &f_ptr[0], 8); \
++            std::memcpy(&f_hi, &f_ptr[1], 8); \
++            std::memcpy(&e_lo, &e_ptr[0], 8); \
++            std::memcpy(&e_hi, &e_ptr[1], 64/8); \
++            fprintf(stderr, "  F[%d]=%016llx%016llx E[%d]=%016llx%016llx\n", i, (unsigned long long)f_hi, (unsigned long long)f_lo, i, (unsigned long long)e_hi, (unsigned long long)e_lo); \
++        } \
++    } } while (0)
++#else
++#define CPU_TRACE_VM_STATE(tag, pc, nreg, config, flags) do {} while (0)
++#endif
++
+ namespace randomx {
+ 
+ 	//register file in machine byte order
+@@ -123,9 +148,10 @@ namespace randomx {
+ 			}
+ 		}
+ 
+-		static void executeBytecode(InstructionByteCode bytecode[RANDOMX_PROGRAM_MAX_SIZE], uint8_t* scratchpad, ProgramConfiguration& config, randomx_flags flags) {
++		static void executeBytecode(InstructionByteCode bytecode[RANDOMX_PROGRAM_MAX_SIZE], uint8_t* scratchpad, ProgramConfiguration& config, randomx_flags flags, NativeRegisterFile& regFile) {
+ 			for (int pc = 0, n = Program::getSize(flags); pc < n; ++pc) {
+ 				auto& ibc = bytecode[pc];
++				CPU_TRACE_VM_STATE("EXEC", pc, regFile, config, flags);
+ 				executeInstruction(ibc, pc, scratchpad, config, flags);
+ 			}
+ 		}
+diff --git a/src/vm_interpreted.cpp b/src/vm_interpreted.cpp
+index 8568897..ea36ecc 100644
+--- a/src/vm_interpreted.cpp
++++ b/src/vm_interpreted.cpp
+@@ -32,6 +32,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ #include <sstream>
+ #include <cmath>
+ #include <cfloat>
++#include <cstdio>
++#include <cstdlib>
+ #include "vm_interpreted.hpp"
+ #include "dataset.hpp"
+ #include "intrin_portable.h"
+@@ -56,6 +58,9 @@ namespace randomx {
+ 	template<class Allocator, bool softAes>
+ 	void InterpretedVm<Allocator, softAes>::execute() {
+ 
++		static int s_exec_count = 0;
++		int my_exec = s_exec_count++;
++
+ 		NativeRegisterFile nreg;
+ 
+ 		for(unsigned i = 0; i < RegisterCountFlt; ++i)
+@@ -82,7 +87,33 @@ namespace randomx {
+ 			for (unsigned i = 0; i < RegisterCountFlt; ++i)
+ 				nreg.e[i] = maskRegisterExponentMantissa(config, rx_cvt_packed_int_vec_f128(scratchpad + spAddr1 + 8 * (RegisterCountFlt + i)));
+ 
+-			executeBytecode(bytecode, scratchpad, config, randomx_vm::getFlags());
++#ifdef RX_TRACE_VM
++			fprintf(stderr, "[CPU_TRACE] ITERSTART ic=%u\n", ic);
++			{
++				static int sp_ic = -2, sp_prog = 0;
++				if (sp_ic == -2) { const char* e = getenv("RX_SP_IC"); sp_ic = e ? atoi(e) : -1;
++				                     const char* p = getenv("RX_SP_PROG"); sp_prog = p ? atoi(p) : 0; }
++				if (sp_ic >= 0 && (int)ic == sp_ic && my_exec == sp_prog) {
++					FILE* f = fopen("cpu_sp_ic.bin", "wb");
++					if (f) { fwrite(scratchpad, 1, randomx::ScratchpadSize, f); fclose(f); }
++					fprintf(stderr, "[cpu] dumped scratchpad prog=%d ic=%u (%d bytes)\n", my_exec, ic, randomx::ScratchpadSize);
++				}
++			}
++			for (unsigned i = 0; i < RegistersCount; ++i)
++				fprintf(stderr, "  R[%u]=%016llx\n", i, (unsigned long long)nreg.r[i]);
++			for (unsigned i = 0; i < RegisterCountFlt; ++i) {
++				uint64_t f_lo, f_hi, e_lo, e_hi;
++				double* fp = (double*)&nreg.f[i];
++				std::memcpy(&f_lo, &fp[0], 8);
++				std::memcpy(&f_hi, &fp[1], 8);
++				double* ep = (double*)&nreg.e[i];
++				std::memcpy(&e_lo, &ep[0], 8);
++				std::memcpy(&e_hi, &ep[1], 8);
++				fprintf(stderr, "  F[%u]=%016llx%016llx E[%u]=%016llx%016llx\n", i, (unsigned long long)f_hi, (unsigned long long)f_lo, i, (unsigned long long)e_hi, (unsigned long long)e_lo);
++			}
++			fprintf(stderr, "  CTL ma=%08x mx=%08x dsOff=%08x rr=%u%u%u%u sp0=%08x sp1=%08x fprc=%u\n", mem.ma, mem.mx, datasetOffset, config.readReg3, config.readReg2, config.readReg1, config.readReg0, spAddr0, spAddr1, (unsigned)rx_get_rounding_mode());
++#endif
++			executeBytecode(bytecode, scratchpad, config, randomx_vm::getFlags(), nreg);
+ 
+ 			const uint64_t readPtr = datasetOffset + (mem.ma & CacheLineAlignMask);
+ 

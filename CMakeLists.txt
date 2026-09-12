@@ -5,6 +5,9 @@ find_package(hiprtc REQUIRED)
 find_package(rocblas REQUIRED)
 find_package(rocrand REQUIRED)
 
+# Linux/other platforms: leave CMAKE_HIP_ARCHITECTURES unset so CMake auto-detects
+# the native GPU via rocm_agent_enumerator; override with -DCMAKE_HIP_ARCHITECTURES=<gfx>.
+
 
 option(WITH_HIP_DRIVER_API "Enable HIP Driver API and HIPRTC, required for cn/r and kawpow algorithms" ON)
 
