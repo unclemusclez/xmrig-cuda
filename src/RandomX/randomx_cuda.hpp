@@ -1881,8 +1881,18 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 	for (int ic = 0; ic < num_iterations; ++ic)
 	{
 		uint64_t *r, *p0, *p1;
+		uint64_t dataset_line = 0;
 		if ((WORKERS_PER_HASH <= 8) || (sub < 8))
 		{
+			// Issue this iteration's dataset line load up front. The read uses
+			// `ma`, which inner_loop cannot modify (dataset is read-only and
+			// ma/mx only swap at the end of the iteration), but the compiler
+			// cannot prove that across the scratchpad writes inside inner_loop,
+			// so without this hoist the ~300-500 ns global latency stalls the
+			// wave right after the inner loop. Hoisted, it overlaps the whole
+			// inner-loop body.
+			dataset_line = *(const uint64_t*)(dataset + ma + sub * 8);
+
 			// Make the previous iteration's stores (other lanes' registers,
 			// scratchpad and imm_buf updates) visible before reading them.
 			rx_wave_sync();
@@ -1925,7 +1935,7 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 			mx ^= *readReg2 ^ *readReg3;
 			mx &= CacheLineAlignMask;
 
-			const uint64_t next_r = *r ^ *(const uint64_t*)(dataset + ma + sub * 8);
+			const uint64_t next_r = *r ^ dataset_line;
 			*r = next_r;
 
 			*p1 = next_r;
