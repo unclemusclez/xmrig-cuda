@@ -22,6 +22,11 @@ option(WITH_ARGON2     "Enable Argon2 algorithms family" OFF) #unsupported
 option(WITH_RANDOMX  "Enable RandomX algorithms family" ON)
 option(WITH_KAWPOW   "Enable KawPow algorithms family" ON)
 
+# RandomX dispatch mode: legacy LDS ip/fprc round-trip (tag 0.0.2 behavior,
+# best known performance; keeps VM_STATE_SIZE at 2048 B so execute_vm fits
+# 8 blocks/CU on gfx1100) vs experimental fast dispatch.
+option(WITH_RX_LEGACY_DISPATCH "Use legacy LDS dispatch for RandomX ip/fprc" ON)
+
 
 include_directories(src)
 add_compile_definitions(CUB_IGNORE_DEPRECATED_CPP_DIALECT)
@@ -143,6 +148,9 @@ endif()
 if (WITH_RANDOMX)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE XMRIG_ALGO_RANDOMX)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE RANDOMX_FREQ_CFROUND=1)
+    if (WITH_RX_LEGACY_DISPATCH)
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE RX_LEGACY_DISPATCH)
+    endif()
 endif()
 
 if (WITH_ARGON2)

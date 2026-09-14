@@ -86,16 +86,28 @@ constexpr size_t REGISTERS_SIZE = 256;
 constexpr size_t IMM_BUF_SIZE = RANDOMX_PROGRAM_SIZE * 4 - REGISTERS_SIZE;
 constexpr size_t IMM_INDEX_COUNT = (IMM_BUF_SIZE / 4) - 2;
 
+#ifdef RX_LEGACY_DISPATCH
+// Legacy dispatch (tag 0.0.2 layout): ip/fprc round-trip through imm_buf in
+// LDS. VM state stays 2048 B per hash (Monero) so an execute_vm block of 4
+// hashes fits exactly 8 blocks per CU in the 64 KB LDS of gfx1100.
+constexpr size_t VM_STATE_SIZE = REGISTERS_SIZE + IMM_BUF_SIZE + RANDOMX_PROGRAM_SIZE * 4;
+#else
 // Group control flags (fast dispatch): 2 bits per compiled program word.
 // Bit0 = word is a live CBRANCH, bit1 = word is a CFROUND. The inner loop
 // scans the flags of its current worker group and recomputes branch/rounding
 // updates uniformly on all lanes, which removes the per-slot LDS round-trip
 // of ip/fprc through imm_buf. Max words = RANDOMX_PROGRAM_SIZE, so the
 // region is RANDOMX_PROGRAM_SIZE/4 bytes (64 B for Monero).
+//
+// PERF NOTE: the extra 64 B/hash grows the LDS block footprint (8192 B ->
+// 8448 B for 4 hashes on gfx1100) and drops occupancy from 8 to 7 blocks per
+// CU, which costs more than the dispatch saves. Fast dispatch is kept for
+// experimentation only; builds ship with RX_LEGACY_DISPATCH.
 constexpr size_t RX_GROUP_FLAGS_OFFSET = REGISTERS_SIZE + IMM_BUF_SIZE + RANDOMX_PROGRAM_SIZE * 4;
 constexpr size_t RX_GROUP_FLAGS_SIZE = (RANDOMX_PROGRAM_SIZE * 2 + 7) / 8;
 
 constexpr size_t VM_STATE_SIZE = RX_GROUP_FLAGS_OFFSET + RX_GROUP_FLAGS_SIZE;
+#endif
 
 constexpr uint32_t CacheLineSize = 64;
 constexpr int ScratchpadL3Mask64 = RANDOMX_SCRATCHPAD_L3 - CacheLineSize;
@@ -912,10 +924,12 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 		uint32_t* compiled_program = (uint32_t*)(R + (REGISTERS_SIZE + IMM_BUF_SIZE) / sizeof(uint64_t));
 
 		// Group control flags: clear before the emit loop ORs bits into them.
+#ifndef RX_LEGACY_DISPATCH
 		uint32_t* group_flags = (uint32_t*)((uint8_t*)R + RX_GROUP_FLAGS_OFFSET);
 		#pragma unroll
 		for (uint32_t gi = 0; gi < RX_GROUP_FLAGS_SIZE / 4; ++gi)
 			group_flags[gi] = 0;
+#endif
 
 		int32_t branch_target_slot = -1;
 		int32_t k = -1;
@@ -1328,8 +1342,10 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 
 				branch_target_slot = -1;
 
+#ifndef RX_LEGACY_DISPATCH
 				if (inst.x != INST_NOP)
 					group_flags[k >> 4] |= 1u << ((k & 15) * 2);
+#endif
 
 *(compiled_program++) = inst.x | num_workers;
 			continue;
@@ -1340,7 +1356,9 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 		{
 			inst.x = (src << SRC_OFFSET) | (13 << OPCODE_OFFSET) | ((inst.y & 63) << IMM_OFFSET);
 
+#ifndef RX_LEGACY_DISPATCH
 			group_flags[k >> 4] |= 2u << ((k & 15) * 2);
+#endif
 
 			*(compiled_program++) = inst.x | num_workers;
 			continue;
