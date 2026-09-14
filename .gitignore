@@ -20,3 +20,4 @@ build_ref_notrace
 *diff*.txt
 .gitignore
 build_legacy
+_*_*.txt

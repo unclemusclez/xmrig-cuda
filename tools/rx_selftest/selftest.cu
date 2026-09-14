@@ -349,14 +349,23 @@ int main(int argc, char** argv)
         fprintf(stderr, "\n");
     }
 
-    // blake2b_hash_registers writes 32 bytes (8 uint32) per item at d_rx_hashes[i*8]
-    std::vector<uint32_t> hashes(batch_size * 8);
+    // blake2b_hash_registers writes 32 bytes (8 uint32) per item at d_rx_hashes[i*8].
+    // Print byte-by-byte in memory order so the output is byte-for-byte comparable
+    // with the CPU oracle (which prints %02x per byte). Printing as %08x uint32
+    // previously reversed each 4-byte word and produced spurious "mismatches".
+    std::vector<uint8_t> hashes(batch_size * 8 * sizeof(uint32_t));
     HIP_CHECK(0, hipMemcpy(hashes.data(), ctx.d_rx_hashes, batch_size * 8 * sizeof(uint32_t), hipMemcpyDeviceToHost));
 
     for (uint32_t i = 0; i < count; ++i) {
         printf("%u ", i);
-        for (int j = 0; j < 8; ++j) printf("%08x", hashes[i * 8 + j]);
+        for (int j = 0; j < 32; ++j) printf("%02x", hashes[i * 32 + j]);
         printf("\n");
+    }
+
+    // Raw dump of item 0's final hash for direct comparison with cpu_final_hash.bin
+    {
+        FILE* f = fopen("gpu_final_hash.bin", "wb");
+        if (f) { fwrite(hashes.data(), 1, 32, f); fclose(f); }
     }
 
     randomx_release_dataset(dataset);
