@@ -109,6 +109,28 @@ constexpr size_t RX_GROUP_FLAGS_SIZE = (RANDOMX_PROGRAM_SIZE * 2 + 7) / 8;
 constexpr size_t VM_STATE_SIZE = RX_GROUP_FLAGS_OFFSET + RX_GROUP_FLAGS_SIZE;
 #endif
 
+// Target wavefront size: GCN (gfx6-9, e.g. gfx906) executes wave64, RDNA
+// (gfx10+, e.g. gfx1100) executes wave32. The value MUST agree between host
+// and device compilation: it sizes LDS buffers on the device and sets the
+// launch block size on the host. CMake derives it from
+// CMAKE_HIP_ARCHITECTURES and passes it for both passes.
+//
+// Do NOT fall back to __AMDGCN_WAVEFRONT_SIZE here: the host pass reports 64
+// even for wave32 targets (and ROCm 7.2 deprecates the macro), which would
+// launch 64-thread blocks into kernels whose LDS is sized for 4 hashes.
+// Standalone builds for wave64 targets must pass -DRX_WAVE_SIZE=64. Never
+// compile a gfx9 target with -mno-wavefrontsize64 -- the silicon still runs
+// 64-wide lanes.
+#ifndef RX_WAVE_SIZE
+#define RX_WAVE_SIZE 32
+#endif
+
+// init_vm/execute_vm blocks are exactly one wavefront wide. With 8 lanes per
+// hash, one block processes RX_VM_HASHES_PER_BLOCK hashes (4 on wave32, 8 on
+// wave64); keeping the block a full wave avoids half-masked wavefronts on
+// wave64 hardware. batch_size must be a multiple of this value.
+constexpr int RX_VM_HASHES_PER_BLOCK = RX_WAVE_SIZE / 8;
+
 constexpr uint32_t CacheLineSize = 64;
 constexpr int ScratchpadL3Mask64 = RANDOMX_SCRATCHPAD_L3 - CacheLineSize;
 constexpr uint32_t CacheLineAlignMask = (RANDOMX_DATASET_BASE_SIZE - 1) & ~(CacheLineSize - 1);
@@ -231,7 +253,7 @@ __device__ uint64_t imul_rcp_value(uint32_t divisor)
 }
 
 template<int WORKERS_PER_HASH>
-__global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_states)
+__global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) init_vm(void* entropy_data, void* vm_states)
 {
 #if RANDOMX_PROGRAM_SIZE <= 256
 	typedef uint8_t exec_t;
@@ -239,17 +261,20 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 	typedef uint16_t exec_t;
 #endif
 
-	__shared__ uint32_t execution_plan_buf[RANDOMX_PROGRAM_SIZE * WORKERS_PER_HASH * (32 / 8) * sizeof(exec_t) / sizeof(uint32_t)];
+	enum { INIT_IDX_WIDTH = (WORKERS_PER_HASH == 16) ? 16 : 8 };
+	enum { INIT_HASHES_PER_BLOCK = RX_WAVE_SIZE / INIT_IDX_WIDTH };
+
+	__shared__ uint32_t execution_plan_buf[RANDOMX_PROGRAM_SIZE * WORKERS_PER_HASH * INIT_HASHES_PER_BLOCK * sizeof(exec_t) / sizeof(uint32_t)];
 
 	set_buffer(execution_plan_buf, 0);
 
 	__syncthreads();
 
 	const uint32_t global_index = blockIdx.x * blockDim.x + threadIdx.x;
-	const uint32_t idx = global_index / 8;
-	const uint32_t sub = global_index % 8;
+	const uint32_t idx = global_index / INIT_IDX_WIDTH;
+	const uint32_t sub = global_index % INIT_IDX_WIDTH;
 
-	exec_t* execution_plan = (exec_t*)(execution_plan_buf + (threadIdx.x / 8) * RANDOMX_PROGRAM_SIZE * WORKERS_PER_HASH * sizeof(exec_t) / sizeof(uint32_t));
+	exec_t* execution_plan = (exec_t*)(execution_plan_buf + (threadIdx.x / INIT_IDX_WIDTH) * RANDOMX_PROGRAM_SIZE * WORKERS_PER_HASH * sizeof(exec_t) / sizeof(uint32_t));
 
 	uint64_t* R = ((uint64_t*) vm_states) + idx * VM_STATE_SIZE / sizeof(uint64_t);
 	R[sub] = 0;
@@ -1652,7 +1677,7 @@ __device__ void inner_loop(
 	const uint32_t batch_size,
 	uint32_t& fprc,
 	const uint64_t xexponentMask,
-	const uint32_t workers_mask,
+	const uint64_t workers_mask,
 	const int32_t trace_ic
 #ifdef RX_LEGACY_DISPATCH
 	, int /* unused */
@@ -1913,7 +1938,7 @@ template<int WORKERS_PER_HASH, bool HIGH_PRECISION>
 __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpads, const void* dataset_ptr, uint32_t batch_size, uint32_t num_iterations, bool first, bool last)
 {
 	enum { IDX_WIDTH = (WORKERS_PER_HASH == 16) ? 16 : 8 };
-	enum { HASHES_PER_BLOCK = 32 / IDX_WIDTH };
+	enum { HASHES_PER_BLOCK = RX_WAVE_SIZE / IDX_WIDTH };
 
 	// Stage the block's VM states in LDS. All cross-lane register traffic
 	// (R/F/E and the imm_buf ip/fprc handoff) runs through LDS: on AMD the
@@ -1982,7 +2007,7 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 	const uint32_t* rx_group_flags = (const uint32_t*)((const uint8_t*)R + RX_GROUP_FLAGS_OFFSET);
 #endif
 
-	const uint32_t workers_mask = ((1 << WORKERS_PER_HASH) - 1) << ((threadIdx.x / IDX_WIDTH) * IDX_WIDTH);
+	const uint64_t workers_mask = ((1ull << WORKERS_PER_HASH) - 1) << ((threadIdx.x / IDX_WIDTH) * IDX_WIDTH);
 
 	TRACE_VM_STATE("ENTER", 0, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
@@ -2102,13 +2127,13 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 }
 
 template<int WORKERS_PER_HASH, bool HIGH_PRECISION>
-__global__ void __launch_bounds__(WORKERS_PER_HASH == 16 ? 32 : 32, 8) execute_vm(void* vm_states, void* rounding, void* scratchpads, const void* dataset_ptr, uint32_t batch_size, uint32_t num_iterations, bool first, bool last)
+__global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 4 : 8) execute_vm(void* vm_states, void* rounding, void* scratchpads, const void* dataset_ptr, uint32_t batch_size, uint32_t num_iterations, bool first, bool last)
 {
 	execute_vm_impl<WORKERS_PER_HASH, HIGH_PRECISION>(vm_states, rounding, scratchpads, dataset_ptr, batch_size, num_iterations, first, last);
 }
 
 template<int WORKERS_PER_HASH, bool HIGH_PRECISION>
-__global__ void __launch_bounds__(WORKERS_PER_HASH == 16 ? 32 : 32, 8) execute_vm_dbg(void* vm_states, void* rounding, void* scratchpads, const void* dataset_ptr, uint32_t batch_size, uint32_t num_iterations, bool first, bool last, uint64_t* dbg, uint32_t* dbg_idx)
+__global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 4 : 8) execute_vm_dbg(void* vm_states, void* rounding, void* scratchpads, const void* dataset_ptr, uint32_t batch_size, uint32_t num_iterations, bool first, bool last, uint64_t* dbg, uint32_t* dbg_idx)
 {
 	execute_vm_impl<WORKERS_PER_HASH, HIGH_PRECISION>(vm_states, rounding, scratchpads, dataset_ptr, batch_size, num_iterations, first, last);
 

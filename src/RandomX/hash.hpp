@@ -88,7 +88,7 @@ void hash(nvid_ctx *ctx, uint32_t nonce, uint32_t nonce_offset, uint64_t target,
         }
 #endif
 
-        CUDA_CHECK_KERNEL(ctx->device_id, init_vm<8><<<batch_size / 4, 4 * 8>>>(ctx->d_rx_entropy, ctx->d_rx_vm_states));
+        CUDA_CHECK_KERNEL(ctx->device_id, init_vm<8><<<batch_size / RX_VM_HASHES_PER_BLOCK, RX_WAVE_SIZE>>>(ctx->d_rx_entropy, ctx->d_rx_vm_states));
 #ifdef RX_DEBUG_STAGE
         CUDA_CHECK(ctx->device_id, hipDeviceSynchronize());
         fprintf(stderr, "[hash] program %d: init_vm done\n", (int)i);
@@ -112,7 +112,7 @@ void hash(nvid_ctx *ctx, uint32_t nonce, uint32_t nonce_offset, uint64_t target,
 #endif
         const int effective_bfactor = std::min(ctx->device_bfactor, 11);
         for (int j = 0, n = 1 << effective_bfactor; j < n; ++j) {
-            CUDA_CHECK_KERNEL(ctx->device_id, execute_vm<8, false><<<batch_size / 4, 4 * 8>>>(ctx->d_rx_vm_states, ctx->d_rx_rounding, ctx->d_long_state, ctx->d_rx_dataset, batch_size, RANDOMX_PROGRAM_ITERATIONS >> effective_bfactor, j == 0, j == n - 1));
+            CUDA_CHECK_KERNEL(ctx->device_id, execute_vm<8, false><<<batch_size / RX_VM_HASHES_PER_BLOCK, RX_WAVE_SIZE>>>(ctx->d_rx_vm_states, ctx->d_rx_rounding, ctx->d_long_state, ctx->d_rx_dataset, batch_size, RANDOMX_PROGRAM_ITERATIONS >> effective_bfactor, j == 0, j == n - 1));
 #ifdef RX_DEBUG_STAGE
             CUDA_CHECK(ctx->device_id, hipDeviceSynchronize());
             if ((j & 15) == 0) fprintf(stderr, "[hash] program %d: execute_vm %d/%d done\n", (int)i, j, n);
