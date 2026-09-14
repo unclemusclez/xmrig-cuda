@@ -1844,9 +1844,15 @@ __device__ void inner_loop(
 			// every lane recomputes the same result from the shared register file
 			// (dst/src values were made visible by the rx_wave_sync above), so no
 			// cross-lane or LDS handoff is needed.
+			//
+			// Scan bound MUST be num_insts, not num_workers: the group physically
+			// spans num_workers+1 words, but only word offsets [0, num_insts] are
+			// consumed by this group (ip advances by num_insts+1). The trailing
+			// num_fp word offsets are re-walked by the next group (fp packing), so
+			// their flags belong to the next group's execution.
 			int32_t cb_word = -1;
 			int32_t cf_word = -1;
-			for (int32_t w = ip, w_end = ip + num_workers; w <= w_end; ++w)
+			for (int32_t w = ip, w_end = ip + num_insts; w <= w_end; ++w)
 			{
 				const uint32_t f = (group_flags[w >> 4] >> ((w & 15) * 2)) & 3;
 				if (f & 1) cb_word = w;
