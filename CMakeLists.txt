@@ -27,6 +27,17 @@ option(WITH_KAWPOW   "Enable KawPow algorithms family" ON)
 # 8 blocks/CU on gfx1100) vs experimental fast dispatch.
 option(WITH_RX_LEGACY_DISPATCH "Use legacy LDS dispatch for RandomX ip/fprc" ON)
 
+# RandomX wavefront size: gfx6xx-gfx9xx execute wave64, gfx10+ execute wave32.
+# The RandomX VM kernels launch one wavefront per block (RX_WAVE_SIZE threads),
+# and host-side launch geometry must match the device, so this is passed as a
+# define for both host and device compilation.
+if (CMAKE_HIP_ARCHITECTURES MATCHES "gfx[6789]")
+    set(RX_WAVE_SIZE 64)
+else()
+    set(RX_WAVE_SIZE 32)
+endif()
+message(STATUS "RandomX: RX_WAVE_SIZE=${RX_WAVE_SIZE} for CMAKE_HIP_ARCHITECTURES=${CMAKE_HIP_ARCHITECTURES}")
+
 
 include_directories(src)
 add_compile_definitions(CUB_IGNORE_DEPRECATED_CPP_DIALECT)
@@ -112,6 +123,7 @@ endif()
 add_library(${CMAKE_PROJECT_NAME} SHARED ${SOURCES})
 target_link_libraries(${CMAKE_PROJECT_NAME} hip::host hiprtc::hiprtc roc::rocblas rocrand)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE __HIP_PLATFORM_AMD__)
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE RX_WAVE_SIZE=${RX_WAVE_SIZE})
 
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
