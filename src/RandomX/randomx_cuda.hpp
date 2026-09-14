@@ -85,7 +85,17 @@ constexpr size_t ENTROPY_SIZE = 128 + ((RANDOMX_PROGRAM_SIZE * 8 + 127) / 128) *
 constexpr size_t REGISTERS_SIZE = 256;
 constexpr size_t IMM_BUF_SIZE = RANDOMX_PROGRAM_SIZE * 4 - REGISTERS_SIZE;
 constexpr size_t IMM_INDEX_COUNT = (IMM_BUF_SIZE / 4) - 2;
-constexpr size_t VM_STATE_SIZE = REGISTERS_SIZE + IMM_BUF_SIZE + RANDOMX_PROGRAM_SIZE * 4;
+
+// Group control flags (fast dispatch): 2 bits per compiled program word.
+// Bit0 = word is a live CBRANCH, bit1 = word is a CFROUND. The inner loop
+// scans the flags of its current worker group and recomputes branch/rounding
+// updates uniformly on all lanes, which removes the per-slot LDS round-trip
+// of ip/fprc through imm_buf. Max words = RANDOMX_PROGRAM_SIZE, so the
+// region is RANDOMX_PROGRAM_SIZE/4 bytes (64 B for Monero).
+constexpr size_t RX_GROUP_FLAGS_OFFSET = REGISTERS_SIZE + IMM_BUF_SIZE + RANDOMX_PROGRAM_SIZE * 4;
+constexpr size_t RX_GROUP_FLAGS_SIZE = (RANDOMX_PROGRAM_SIZE * 2 + 7) / 8;
+
+constexpr size_t VM_STATE_SIZE = RX_GROUP_FLAGS_OFFSET + RX_GROUP_FLAGS_SIZE;
 
 constexpr uint32_t CacheLineSize = 64;
 constexpr int ScratchpadL3Mask64 = RANDOMX_SCRATCHPAD_L3 - CacheLineSize;
@@ -901,6 +911,12 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 		int32_t imm_index_fscal_r = -1;
 		uint32_t* compiled_program = (uint32_t*)(R + (REGISTERS_SIZE + IMM_BUF_SIZE) / sizeof(uint64_t));
 
+		// Group control flags: clear before the emit loop ORs bits into them.
+		uint32_t* group_flags = (uint32_t*)((uint8_t*)R + RX_GROUP_FLAGS_OFFSET);
+		#pragma unroll
+		for (uint32_t gi = 0; gi < RX_GROUP_FLAGS_SIZE / 4; ++gi)
+			group_flags[gi] = 0;
+
 		int32_t branch_target_slot = -1;
 		int32_t k = -1;
 		for (int32_t i = 0; i <= last_used_slot; ++i)
@@ -1312,6 +1328,9 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 
 				branch_target_slot = -1;
 
+				if (inst.x != INST_NOP)
+					group_flags[k >> 4] |= 1u << ((k & 15) * 2);
+
 *(compiled_program++) = inst.x | num_workers;
 			continue;
 		}
@@ -1320,6 +1339,8 @@ __global__ void __launch_bounds__(32, 16) init_vm(void* entropy_data, void* vm_s
 		if (opcode < RANDOMX_FREQ_CFROUND)
 		{
 			inst.x = (src << SRC_OFFSET) | (13 << OPCODE_OFFSET) | ((inst.y & 63) << IMM_OFFSET);
+
+			group_flags[k >> 4] |= 2u << ((k & 15) * 2);
 
 			*(compiled_program++) = inst.x | num_workers;
 			continue;
@@ -1615,18 +1636,27 @@ __device__ void inner_loop(
 	const uint64_t xexponentMask,
 	const uint32_t workers_mask,
 	const int32_t trace_ic
+#ifdef RX_LEGACY_DISPATCH
+	, int /* unused */
+#else
+	, const uint32_t* group_flags
+#endif
 )
 {
 	const int32_t sub2 = sub >> 1;
 	const bool trc = (trace_ic == RX_TRACE_LO);                              // full group walk
 	const bool trc_entry = (trace_ic >= RX_TRACE_LO) && (trace_ic < RX_TRACE_HI); // START state only
+#ifdef RX_LEGACY_DISPATCH
 	imm_buf[IMM_INDEX_COUNT + 1] = fprc;
+#endif
 	if (trc_entry) { rx_wave_sync(); RX_TRACE_GROUP(trace_ic, 0, fprc, R); }
 
 	#pragma unroll(1)
 	for (int32_t ip = 0; ip < program_length;)
 	{
+#ifdef RX_LEGACY_DISPATCH
 		imm_buf[IMM_INDEX_COUNT] = ip;
+#endif
 
 		uint32_t inst = compiled_program[ip];
 		const int32_t num_workers = (inst >> NUM_INSTS_OFFSET) & (WORKERS_PER_HASH - 1);
@@ -1715,12 +1745,26 @@ __device__ void inner_loop(
 				else if (opcode == 9)
 				{
 					// CBRANCH: add immediate to dst, then jump if the condition bits are all zero.
-					// imm.y encodes (branch_target_slot << 5) | condition_shift.
 					dst += static_cast<int32_t>(imm.x);
+					// imm.y encodes (branch_target_slot << 5) | condition_shift.
+#ifdef RX_LEGACY_DISPATCH
 					if ((static_cast<uint32_t>(dst) & (randomx::ConditionMask << (imm.y & 31))) == 0)
 					{
 						imm_buf[IMM_INDEX_COUNT] = static_cast<uint32_t>((static_cast<int32_t>(imm.y) >> 5) - num_insts);
 					}
+#else
+					// Fast dispatch: publish the dispatch-time branch outcome. It must be
+					// captured here rather than recomputed in the epilogue, because `dst`
+					// (and the register file generally) may be overwritten by other
+					// instructions of this same group before the epilogue runs. Store the
+					// target offset when taken, else the group's ip (fall-through).
+					{
+						uint32_t jmp = static_cast<uint32_t>(ip);
+						if ((static_cast<uint32_t>(dst) & (randomx::ConditionMask << (imm.y & 31))) == 0)
+							jmp = static_cast<uint32_t>((static_cast<int32_t>(imm.y) >> 5) - num_insts);
+						imm_buf[IMM_INDEX_COUNT] = jmp;
+					}
+#endif
 				}
 				else if (opcode == 7)
 				{
@@ -1778,6 +1822,10 @@ __device__ void inner_loop(
 				{
 					// CFROUND: rotate src right by imm_offset, new rounding mode = lowest 2 bits.
 					// dst is intentionally NOT written back.
+					//
+					// Store (in BOTH dispatch modes): `src` is the dispatch-time value; another
+					// instruction of this same group may overwrite that register before the
+					// epilogue, so recomputing the mode from R there is not equivalent.
 					imm_buf[IMM_INDEX_COUNT + 1] = ((src >> imm_offset) | (src << ((64 - imm_offset) & 63))) & 3;
 					goto execution_end;
 				}
@@ -1788,15 +1836,55 @@ __device__ void inner_loop(
 
 		execution_end:
 		{
+			// Make every lane's register/scratchpad stores of this slot visible.
+			rx_wave_sync();
+
+#ifdef RX_LEGACY_DISPATCH
 			// Synchronize the instruction pointer and the rounding mode across all
 			// lanes of the hash: CBRANCH/CFROUND above may have updated them from
 			// a single lane via imm_buf.
-			rx_wave_sync();
-
 			ip = imm_buf[IMM_INDEX_COUNT];
 			fprc = imm_buf[IMM_INDEX_COUNT + 1];
 
 			ip += num_insts + 1;
+#else
+			// Fast dispatch: ip/fprc are register-resident. Scan this group's control
+			// flags; only groups containing CBRANCH/CFROUND touch the control cells.
+			// The executing lane published the dispatch-time branch/rounding results
+			// into imm_buf above — reading them here is correct even though other
+			// instructions of this group have since overwritten the register file.
+			//
+			// Scan bound MUST be num_insts, not num_workers: the group physically
+			// spans num_workers+1 words, but only word offsets [0, num_insts] are
+			// consumed by this group (ip advances by num_insts+1). The trailing
+			// num_fp word offsets are re-walked by the next group (fp packing), so
+			// their flags belong to the next group's execution.
+			int32_t cb_word = -1;
+			int32_t cf_word = -1;
+			for (int32_t w = ip, w_end = ip + num_insts; w <= w_end; ++w)
+			{
+				const uint32_t f = (group_flags[w >> 4] >> ((w & 15) * 2)) & 3;
+				if (f & 1) cb_word = w;
+				if (f & 2) cf_word = w;
+			}
+
+			if (cf_word >= 0)
+				fprc = imm_buf[IMM_INDEX_COUNT + 1];
+
+			if (cb_word >= 0)
+				ip = imm_buf[IMM_INDEX_COUNT] + num_insts + 1;
+			else
+				ip += num_insts + 1;
+#endif
+
+#ifdef RX_FAST_DBG
+			if (trace_ic == 0 && blockIdx.x == 0 && threadIdx.x == 0)
+#ifndef RX_LEGACY_DISPATCH
+				printf("[F ip=%d fprc=%u cb=%d cf=%d]\n", (int)ip, (unsigned)fprc, (int)cb_word, (int)cf_word);
+#else
+				printf("[F ip=%d fprc=%u]\n", (int)ip, (unsigned)fprc);
+#endif
+#endif
 
 			if (trc) RX_TRACE_GROUP(trace_ic, ip, fprc, R);
 		}
@@ -1872,6 +1960,9 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 
 	uint32_t* imm_buf = (uint32_t*)(R + REGISTERS_SIZE / sizeof(uint64_t));
 	const uint32_t* compiled_program = (const uint32_t*)(R + (REGISTERS_SIZE + IMM_BUF_SIZE) / sizeof(uint64_t));
+#ifndef RX_LEGACY_DISPATCH
+	const uint32_t* rx_group_flags = (const uint32_t*)((const uint8_t*)R + RX_GROUP_FLAGS_OFFSET);
+#endif
 
 	const uint32_t workers_mask = ((1 << WORKERS_PER_HASH) - 1) << ((threadIdx.x / IDX_WIDTH) * IDX_WIDTH);
 
@@ -1922,7 +2013,13 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 		TRACE_VM_STATE("BEFORE_INNER_LOOP", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
 		if ((WORKERS_PER_HASH == IDX_WIDTH) || (sub < WORKERS_PER_HASH))
-			inner_loop<WORKERS_PER_HASH, HIGH_PRECISION>(program_length, compiled_program, sub, scratchpad, fp_reg_offset, fp_reg_group_A_offset, R, imm_buf, batch_size, fprc, xexponentMask, workers_mask, ic);
+			inner_loop<WORKERS_PER_HASH, HIGH_PRECISION>(program_length, compiled_program, sub, scratchpad, fp_reg_offset, fp_reg_group_A_offset, R, imm_buf, batch_size, fprc, xexponentMask, workers_mask, ic
+#ifdef RX_LEGACY_DISPATCH
+				, 0
+#else
+				, rx_group_flags
+#endif
+			);
 
 		TRACE_VM_STATE("AFTER_INNER_LOOP", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
