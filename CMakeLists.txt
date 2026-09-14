@@ -30,11 +30,14 @@ option(WITH_RX_LEGACY_DISPATCH "Use legacy LDS dispatch for RandomX ip/fprc" ON)
 # RandomX wavefront size: gfx6xx-gfx9xx execute wave64, gfx10+ execute wave32.
 # The RandomX VM kernels launch one wavefront per block (RX_WAVE_SIZE threads),
 # and host-side launch geometry must match the device, so this is passed as a
-# define for both host and device compilation.
-if (CMAKE_HIP_ARCHITECTURES MATCHES "gfx[6789]")
-    set(RX_WAVE_SIZE 64)
-else()
-    set(RX_WAVE_SIZE 32)
+# define for both host and device compilation. Pass -DRX_WAVE_SIZE=64 to force
+# wave64 on RDNA3 (also add -mwavefrontsize64 to CMAKE_HIP_FLAGS then).
+if (NOT DEFINED RX_WAVE_SIZE)
+    if (CMAKE_HIP_ARCHITECTURES MATCHES "gfx[6789]")
+        set(RX_WAVE_SIZE 64)
+    else()
+        set(RX_WAVE_SIZE 32)
+    endif()
 endif()
 message(STATUS "RandomX: RX_WAVE_SIZE=${RX_WAVE_SIZE} for CMAKE_HIP_ARCHITECTURES=${CMAKE_HIP_ARCHITECTURES}")
 

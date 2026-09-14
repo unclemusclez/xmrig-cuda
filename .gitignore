@@ -21,3 +21,4 @@ build_ref_notrace
 .gitignore
 build_legacy
 _*_*.txt
+build_w64
