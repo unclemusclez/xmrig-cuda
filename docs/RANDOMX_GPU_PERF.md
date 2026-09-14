@@ -65,25 +65,33 @@ iteration so its ~300–500 ns global latency overlaps the inner loop instead
 of stalling the wave after it (`execute_vm_impl`, `dataset_line`). Expected:
 a few percent, grows with memory latency (MI50).
 
-### Phase 1b — eliminate per-slot ip/fprc LDS round-trip
-- Keep `ip`/`fprc` in registers on every lane.
-- The executing lane of a CBRANCH/CFROUND publishes the new value via
-  `__ballot(taken) & workers_mask` (already computed, currently unused) +
-  exactly one `__shfl` from the owning lane; all other slots advance
-  `ip += num_insts + 1` with **no LDS traffic and no extra waitcnt** beyond
-  what register/scratchpad coherence requires.
-- Fallback for architectures where cross-lane vote semantics are unsafe at
-  32-thread-blocks-on-wave64 (gfx906 packs two blocks per wavefront): a
-  compile-time switch keeps the current LDS protocol.
-- Gate behind `RX_FAST_DISPATCH` (default ON on wave32 builds, opt-in on
-  wave64 until validated).
+### Phase 1b — eliminate per-slot ip/fprc LDS round-trip (IMPLEMENTED 2026-09-14, pending validation)
 
-Correctness gate: `tools/rx_selftest`, RX_TRACE_VM group traces vs CPU
-reference, and at least one accepted pool share at diff >= 10k.
+Profile evidence (rocprof, MI50): `execute_vm` = **92.98%** of GPU time
+(fillAes1Rx4 4.37%, hashAes1Rx4 2.07%, init_vm 0.57%).
 
-Expected: removes the dominant fixed per-slot overhead; est. 1.15–1.4x on
-total hashrate (inner loop is the majority of kernel time; fillAes/blake2b
-phases are unchanged).
+Implemented design (no per-lane publish — uniform recompute instead):
+- `init_vm` now emits **group control flags** alongside the compiled program:
+  2 bits per compiled word (bit0 = live CBRANCH, bit1 = CFROUND) at
+  `RX_GROUP_FLAGS_OFFSET` in the per-hash VM state (VM_STATE_SIZE grew
+  2048 -> 2112 B; host allocation was already 2560 B/hash).
+- `inner_loop` keeps `ip`/`fprc` in registers. The slot-start
+  `imm_buf[IMM_INDEX_COUNT] = ip` store and the epilogue ip/fprc LDS
+  loads are gone. After the (still required) `rx_wave_sync`, every slot
+  scans its group's flag bits (~1-2 LDS loads); only slots containing a
+  control word do extra work: all lanes recompute the branch condition or
+  rounding mode from the shared LDS register file — no cross-lane publish,
+  no ballot/shuffle, safe on wave64 with 32-thread blocks.
+- CBRANCH target math preserved exactly: `ip = (imm.y >> 5) + 1`
+  (equivalent to the old `(target - num_insts) + num_insts + 1`).
+- Legacy protocol retained behind `RX_LEGACY_DISPATCH` for fallback
+  (add `-DRX_LEGACY_DISPATCH` to CMAKE_HIP_FLAGS / nvcc flags).
+
+Correctness gate: `tools/rx_selftest` byte-exact, RX_TRACE_VM group traces
+vs CPU reference, and accepted pool shares.
+
+Expected: removes ~3 LDS ops + serialized lgkm waits per slot across ~200
+slots x 2048 iterations x 8 programs per hash; est. 1.15-1.4x hashrate.
 
 ### Phase 2 — selective megakernel specialization (only if 1b underdelivers)
 Per-*job-structure* (not per-hash) template variants: number of slots,
