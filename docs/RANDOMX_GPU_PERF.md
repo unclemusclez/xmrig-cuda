@@ -3,6 +3,27 @@
 Date: 2026-09-14
 Scope: HIP backend RandomX kernels (`src/RandomX/`), targets gfx1100 (7900 XT, wave32) and gfx906 (MI50, wave64).
 
+## 0. Wavefront policy
+
+AMD GPUs support both 64- and 32-lane wavefronts; clang selects the size at
+compile time (`-mwavefrontsize64` / `-mno-wavefrontsize64`), defaulting per
+target. Verified on this stack with a `warpSize` probe kernel.
+
+- **gfx1100 (RX 7900 XT, RDNA3):** hardware supports both modes. The kernels
+  in this repo are designed for wave32 (8 lanes per hash, 32-thread blocks,
+  worker-group coordination) and `CMakeLists.txt` forces
+  `--offload-arch=gfx1100 -mno-wavefrontsize64`. Any other build of these
+  kernels for gfx1100 (selftests, debug tools) MUST pass the same flag, or
+  32-thread blocks execute as half of a 64-lane wavefront.
+- **gfx906 (MI50, Vega 20):** wave64 is the only hardware mode; the flag is
+  ineffective/unavailable. Two 32-thread blocks share each wavefront, so all
+  cross-lane coordination MUST stay block-scoped (LDS + `s_waitcnt` via
+  `rx_wave_sync`); no block-wide assumption may rely on wavefront-wide
+  visibility. This constraint is what the LDS-staging design in
+  `execute_vm_impl` provides.
+- Selftest/debug harness builds (`tools/rx_selftest/*.bat`) follow the same
+  rule: gfx1100 builds carry `-mno-wavefrontsize64`.
+
 ## 1. Current architecture
 
 Pipeline per job, per hash in the batch (`src/RandomX/hash.hpp`):
