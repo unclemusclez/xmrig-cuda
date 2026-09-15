@@ -131,6 +131,17 @@ constexpr size_t VM_STATE_SIZE = RX_GROUP_FLAGS_OFFSET + RX_GROUP_FLAGS_SIZE;
 // wave64 hardware. batch_size must be a multiple of this value.
 constexpr int RX_VM_HASHES_PER_BLOCK = RX_WAVE_SIZE / 8;
 
+// execute_vm occupancy target (blocks per CU). With RX_PROGRAM_IN_GLOBAL the
+// per-block LDS footprint halves, so wave64 targets can hold 8 blocks/CU
+// instead of 4.
+#ifdef RX_PROGRAM_IN_GLOBAL
+constexpr int RX_VM_BLOCKS_PER_CU = 8;
+#elif RX_WAVE_SIZE == 64
+constexpr int RX_VM_BLOCKS_PER_CU = 4;
+#else
+constexpr int RX_VM_BLOCKS_PER_CU = 8;
+#endif
+
 constexpr uint32_t CacheLineSize = 64;
 constexpr int ScratchpadL3Mask64 = RANDOMX_SCRATCHPAD_L3 - CacheLineSize;
 constexpr uint32_t CacheLineAlignMask = (RANDOMX_DATASET_BASE_SIZE - 1) & ~(CacheLineSize - 1);
@@ -1947,10 +1958,35 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 	// lgkmcnt drains (see rx_wave_sync). The state is written back to global
 	// at the end of every kernel call, so it still survives the bfactor
 	// kernel splits.
-	__shared__ uint64_t vm_states_local[HASHES_PER_BLOCK * VM_STATE_SIZE / sizeof(uint64_t)];
+	//
+	// With RX_PROGRAM_IN_GLOBAL the compiled program (read-only during
+	// execute_vm -- written once by init_vm) is not staged: it is fetched
+	// from global memory where it stays L1-resident. That halves the LDS
+	// footprint per hash, doubling resident blocks per CU on wave64
+	// (8 blocks/CU on gfx906 instead of 4).
+#ifdef RX_PROGRAM_IN_GLOBAL
+	enum { STAGED_SIZE = REGISTERS_SIZE + IMM_BUF_SIZE };
+#else
+	enum { STAGED_SIZE = VM_STATE_SIZE };
+#endif
 
+	__shared__ uint64_t vm_states_local[HASHES_PER_BLOCK * STAGED_SIZE / sizeof(uint64_t)];
+
+#ifdef RX_PROGRAM_IN_GLOBAL
+	// Strided stage: copy only the first STAGED_SIZE bytes of each hash's
+	// global VM state into packed LDS.
+	{
+		enum { SQ = STAGED_SIZE / sizeof(uint64_t) };
+		const uint64_t* g = ((const uint64_t*) vm_states) + blockIdx.x * HASHES_PER_BLOCK * (VM_STATE_SIZE / sizeof(uint64_t));
+		for (uint32_t h = 0; h < HASHES_PER_BLOCK; ++h)
+			for (uint32_t e = threadIdx.x; e < SQ; e += blockDim.x)
+				vm_states_local[h * SQ + e] = g[h * (VM_STATE_SIZE / sizeof(uint64_t)) + e];
+	}
+	__syncthreads();
+#else
 	load_buffer(vm_states_local, ((const uint64_t*) vm_states) + blockIdx.x * HASHES_PER_BLOCK * (VM_STATE_SIZE / sizeof(uint64_t)));
 	__syncthreads();
+#endif
 
 	const int32_t global_index = blockIdx.x * blockDim.x + threadIdx.x;
 	const int32_t idx = global_index / IDX_WIDTH;
@@ -1959,7 +1995,7 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 	if (idx >= batch_size)
 		return;
 
-	uint64_t* R = vm_states_local + (threadIdx.x / IDX_WIDTH) * VM_STATE_SIZE / sizeof(uint64_t);
+	uint64_t* R = vm_states_local + (threadIdx.x / IDX_WIDTH) * STAGED_SIZE / sizeof(uint64_t);
 	double* F = (double*)(R + 8);
 	double* E = (double*)(R + 16);
 
@@ -2002,7 +2038,13 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 	const uint64_t xexponentMask = (sub & 1) ? eMask.y : eMask.x;
 
 	uint32_t* imm_buf = (uint32_t*)(R + REGISTERS_SIZE / sizeof(uint64_t));
+#ifdef RX_PROGRAM_IN_GLOBAL
+	// Read-only here (init_vm wrote it; the kernel boundary makes it
+	// globally visible). L1-hot across all iterations of one program.
+	const uint32_t* compiled_program = ((const uint32_t*) vm_states) + (uint64_t)idx * (VM_STATE_SIZE / sizeof(uint32_t)) + (REGISTERS_SIZE + IMM_BUF_SIZE) / sizeof(uint32_t);
+#else
 	const uint32_t* compiled_program = (const uint32_t*)(R + (REGISTERS_SIZE + IMM_BUF_SIZE) / sizeof(uint64_t));
+#endif
 #ifndef RX_LEGACY_DISPATCH
 	const uint32_t* rx_group_flags = (const uint32_t*)((const uint8_t*)R + RX_GROUP_FLAGS_OFFSET);
 #endif
@@ -2127,13 +2169,13 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 }
 
 template<int WORKERS_PER_HASH, bool HIGH_PRECISION>
-__global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 4 : 8) execute_vm(void* vm_states, void* rounding, void* scratchpads, const void* dataset_ptr, uint32_t batch_size, uint32_t num_iterations, bool first, bool last)
+__global__ void __launch_bounds__(RX_WAVE_SIZE, RX_VM_BLOCKS_PER_CU) execute_vm(void* vm_states, void* rounding, void* scratchpads, const void* dataset_ptr, uint32_t batch_size, uint32_t num_iterations, bool first, bool last)
 {
 	execute_vm_impl<WORKERS_PER_HASH, HIGH_PRECISION>(vm_states, rounding, scratchpads, dataset_ptr, batch_size, num_iterations, first, last);
 }
 
 template<int WORKERS_PER_HASH, bool HIGH_PRECISION>
-__global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 4 : 8) execute_vm_dbg(void* vm_states, void* rounding, void* scratchpads, const void* dataset_ptr, uint32_t batch_size, uint32_t num_iterations, bool first, bool last, uint64_t* dbg, uint32_t* dbg_idx)
+__global__ void __launch_bounds__(RX_WAVE_SIZE, RX_VM_BLOCKS_PER_CU) execute_vm_dbg(void* vm_states, void* rounding, void* scratchpads, const void* dataset_ptr, uint32_t batch_size, uint32_t num_iterations, bool first, bool last, uint64_t* dbg, uint32_t* dbg_idx)
 {
 	execute_vm_impl<WORKERS_PER_HASH, HIGH_PRECISION>(vm_states, rounding, scratchpads, dataset_ptr, batch_size, num_iterations, first, last);
 
