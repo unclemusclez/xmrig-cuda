@@ -27,6 +27,11 @@ option(WITH_KAWPOW   "Enable KawPow algorithms family" ON)
 # 8 blocks/CU on gfx1100) vs experimental fast dispatch.
 option(WITH_RX_LEGACY_DISPATCH "Use legacy LDS dispatch for RandomX ip/fprc" ON)
 
+# LDS occupancy: fetch the read-only compiled RandomX program from global
+# memory (L1-hot) instead of staging it in LDS. Halves the per-block LDS
+# footprint, doubling blocks/CU on wave64 targets (gfx906: 4 -> 8).
+option(WITH_RX_PROGRAM_IN_GLOBAL "Keep RandomX compiled program in global cache instead of LDS" OFF)
+
 # RandomX wavefront size: gfx6xx-gfx9xx execute wave64, gfx10+ execute wave32.
 # The RandomX VM kernels launch one wavefront per block (RX_WAVE_SIZE threads),
 # and host-side launch geometry must match the device, so this is passed as a
@@ -165,6 +170,9 @@ if (WITH_RANDOMX)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE RANDOMX_FREQ_CFROUND=1)
     if (WITH_RX_LEGACY_DISPATCH)
         target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE RX_LEGACY_DISPATCH)
+    endif()
+    if (WITH_RX_PROGRAM_IN_GLOBAL)
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE RX_PROGRAM_IN_GLOBAL)
     endif()
 endif()
 
