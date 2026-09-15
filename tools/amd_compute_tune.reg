@@ -1,0 +1,21 @@
+Windows Registry Editor Version 5.00
+
+; AMD compute tweaks for the RX 7900 XT (display-connected Windows rig).
+; Merge as Administrator, then REBOOT.
+;
+; NOTE: the device subkey below is 0002 on this machine -- verify yours is the
+; entry with DriverDesc "AMD Radeon RX 7900 XT" under:
+; HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}
+
+; 1) ULPS off: stops the card dropping into ultra-low-power states between
+;    kernel launches. The classic fix for spiky/unsteady compute on
+;    display-connected RDNA. (Your current value: 1 = enabled.)
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0002]
+"EnableUlps"=dword:00000000
+
+; 2) TDR: give long kernels headroom. Default watchdog is ~2 s; a bfactor=0
+;    RandomX kernel can approach that. 60 s removes the risk without disabling
+;    recovery entirely.
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\GraphicsDrivers]
+"TdrDelay"=dword:0000003c
+"TdrDdiDelay"=dword:0000003c
