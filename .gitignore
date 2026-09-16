@@ -22,3 +22,4 @@ build_ref_notrace
 build_legacy
 _*_*.txt
 build_w64
+build_*/

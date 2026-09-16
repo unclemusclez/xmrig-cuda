@@ -236,6 +236,14 @@ constexpr int ScratchpadL2Mask64 = RANDOMX_SCRATCHPAD_L2 - CacheLineSize;
 
 #define INST_NOP			(8 << OPCODE_OFFSET)
 
+// Group header word: the first word of every group, read by all participating
+// lanes for num_workers/num_fp. Bits 27 and 31 are otherwise unused
+// (num_insts sits at 24-26, num_fp at 28-30). M2c: bit 27 = group contains a
+// live CBRANCH, bit 31 = group contains a CFROUND. Lets execution_end resolve
+// ip/fprc with predicated imm_buf reads only -- no per-word flag scan.
+#define GROUP_CB_BIT		(1u << 27)
+#define GROUP_CF_BIT		(1u << 31)
+
 template<size_t N> struct get_power_of_2 { enum { Value = get_power_of_2<N / 2>::Value + 1 }; };
 template<> struct get_power_of_2<1> { enum { Value = 0 }; };
 
@@ -979,7 +987,8 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 	// bits from the word itself (opcode/loc/dst/src fields). Centralizing the
 	// flag logic keeps every opcode class consistent. INST_NOP decodes as
 	// opcode 8 (degenerate ISWAP on r0); a live ISWAP_R additionally has
-	// dst != src, which distinguishes it from a NOP word.
+	// dst != src, which distinguishes it from a NOP word. Group-level cb/cf
+	// header bits are folded in by the post-pass after the emit loop.
 	auto rx_emit_word = [&](uint32_t word) {
 		*(compiled_program++) = word;
 		const uint32_t opc = (word >> OPCODE_OFFSET) & 15;
@@ -998,9 +1007,9 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 #endif
 
 	for (int32_t i = 0; i <= last_used_slot; ++i)
-		{
-			if (!(execution_plan[i] || (i == first_instruction_slot) || ((i == first_instruction_slot + 1) && first_instruction_fp)))
-				continue;
+	{
+		if (!(execution_plan[i] || (i == first_instruction_slot) || ((i == first_instruction_slot + 1) && first_instruction_fp)))
+			continue;
 
 			uint32_t num_workers = 1;
 			uint32_t num_fp_insts = 0;
@@ -1437,6 +1446,59 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 			rx_emit_word(inst.x | num_workers);
 		}
 
+#ifndef RX_LEGACY_DISPATCH
+		// M2c post-pass: fold the per-word cb/cf flags into group header
+		// words (GROUP_CB_BIT / GROUP_CF_BIT). A header is any word position
+		// the executor can start a group from: the fall-through walk from 0
+		// (ip += num_insts + 1) plus every branch landing
+		// (branch_target_slot + 1, decoded from the CBRANCH immediates).
+		// Walked with a fixed-point queue because branch-target groups may
+		// themselves contain branches. The per-word flags were emitted with
+		// correct positions, so this pass only needs to OR-reduce them over
+		// each group span.
+		{
+			uint32_t* const prog_base = (uint32_t*)(R + (REGISTERS_SIZE + IMM_BUF_SIZE) / sizeof(uint64_t));
+			uint64_t done[4] = { 0, 0, 0, 0 };
+			int32_t queue[64];
+			int32_t qn = 0;
+
+			auto fold_header = [&](int32_t ip0) -> int32_t {
+				done[ip0 >> 6] |= 1ull << (ip0 & 63);
+				const uint32_t hdr = prog_base[ip0];
+				const int32_t num_workers = (hdr >> NUM_INSTS_OFFSET) & (WORKERS_PER_HASH - 1);
+				const int32_t num_fp = (hdr >> NUM_FP_INSTS_OFFSET) & (WORKERS_PER_HASH - 1);
+				const int32_t num_insts = num_workers - num_fp;
+				uint32_t bits = 0;
+				for (int32_t w = ip0, w_end = ip0 + num_insts; (w <= w_end) && (w <= k); ++w)
+				{
+					const uint32_t f = (group_flags[w >> 3] >> ((w & 7) * 4)) & 3;
+					if (f & 1) bits |= GROUP_CB_BIT;
+					if (f & 2) bits |= GROUP_CF_BIT;
+					if ((f & 1) && (qn < 64))
+					{
+						// Branch word: decode its target and queue it as a
+						// header (executor lands at branch_target_slot + 1).
+						const uint32_t ioff = (prog_base[w] >> IMM_OFFSET) & 255;
+						const int32_t tgt = static_cast<int32_t>(imm_buf[ioff + 1] >> 5) + 1;
+						if ((tgt >= 0) && (tgt <= k) && !(done[tgt >> 6] & (1ull << (tgt & 63))))
+							queue[qn++] = tgt;
+					}
+				}
+				prog_base[ip0] = hdr | bits;
+				return num_insts + 1;
+			};
+
+			for (int32_t ip = 0; ip <= k; )
+			{
+				if (done[ip >> 6] & (1ull << (ip & 63))) break;
+				ip += fold_header(ip);
+			}
+			for (int32_t qi = 0; qi < qn; ++qi)
+				if (!(done[queue[qi] >> 6] & (1ull << (queue[qi] & 63))))
+					fold_header(queue[qi]);
+		}
+#endif
+
 		((uint32_t*)(R + 20))[0] = static_cast<uint32_t>(compiled_program - (uint32_t*)(R + (REGISTERS_SIZE + IMM_BUF_SIZE) / sizeof(uint64_t)));
 	}
 }
@@ -1709,11 +1771,6 @@ __device__ void inner_loop(
 	const uint64_t xexponentMask,
 	const uint64_t workers_mask,
 	const int32_t trace_ic
-#ifdef RX_LEGACY_DISPATCH
-	, int /* unused */
-#else
-	, const uint32_t* group_flags
-#endif
 )
 {
 	const int32_t sub2 = sub >> 1;
@@ -1735,6 +1792,7 @@ __device__ void inner_loop(
 		const int32_t num_workers = (inst >> NUM_INSTS_OFFSET) & (WORKERS_PER_HASH - 1);
 		const int32_t num_fp_insts = (inst >> NUM_FP_INSTS_OFFSET) & (WORKERS_PER_HASH - 1);
 		const int32_t num_insts = num_workers - num_fp_insts;
+		const uint32_t group_bits = inst & (GROUP_CB_BIT | GROUP_CF_BIT);
 
 		if (sub <= num_workers)
 		{
@@ -1754,6 +1812,13 @@ __device__ void inner_loop(
 
 			uint32_t src_offset = (inst >> SRC_OFFSET) & 7;
 			src_offset = (src_offset << 3) + (location ? 0 : reg_base_src_offset);
+
+			// M2a: INST_NOP decodes as ISWAP_R on r0 with dst == src (an
+			// identity self-swap) but still pays the full register-file LDS
+			// round trip. Skip it. Live ISWAP_R words always have dst != src
+			// (the emitter NOPs the degenerate case), so this test is exact.
+			if ((opcode == 8) && (dst_offset == src_offset))
+				goto execution_end;
 
 			uint64_t* dst_ptr = (uint64_t*)((uint8_t*)(R) + dst_offset);
 			uint64_t* src_ptr = (uint64_t*)((uint8_t*)(R) + src_offset);
@@ -1921,30 +1986,19 @@ __device__ void inner_loop(
 
 			ip += num_insts + 1;
 #else
-			// Fast dispatch: ip/fprc are register-resident. Scan this group's control
-			// flags; only groups containing CBRANCH/CFROUND touch the control cells.
-			// The executing lane published the dispatch-time branch/rounding results
-			// into imm_buf above — reading them here is correct even though other
-			// instructions of this group have since overwritten the register file.
-			//
-			// Scan bound MUST be num_insts, not num_workers: the group physically
-			// spans num_workers+1 words, but only word offsets [0, num_insts] are
-			// consumed by this group (ip advances by num_insts+1). The trailing
-			// num_fp word offsets are re-walked by the next group (fp packing), so
-			// their flags belong to the next group's execution.
-			int32_t cb_word = -1;
-			int32_t cf_word = -1;
-			for (int32_t w = ip, w_end = ip + num_insts; w <= w_end; ++w)
-			{
-				const uint32_t f = (group_flags[w >> 3] >> ((w & 7) * 4)) & 3;
-				if (f & 1) cb_word = w;
-				if (f & 2) cf_word = w;
-			}
-
-			if (cf_word >= 0)
+			// Fast dispatch: ip/fprc are register-resident. M2c: cb/cf
+			// presence bits live in the group header word, which every lane
+			// already loaded at group start -- zero flag reads, zero scan.
+			// The two imm_buf reads below are uniform across the hash's lanes
+			// (no divergence) and are skipped entirely for non-control
+			// groups. The executing lane published the dispatch-time
+			// branch/rounding results into imm_buf above; reading them here
+			// is correct even though other instructions of this group have
+			// since overwritten the register file.
+			if (group_bits & GROUP_CF_BIT)
 				fprc = imm_buf[IMM_INDEX_COUNT + 1];
 
-			if (cb_word >= 0)
+			if (group_bits & GROUP_CB_BIT)
 				ip = imm_buf[IMM_INDEX_COUNT] + num_insts + 1;
 			else
 				ip += num_insts + 1;
@@ -1953,7 +2007,7 @@ __device__ void inner_loop(
 #ifdef RX_FAST_DBG
 			if (trace_ic == 0 && blockIdx.x == 0 && threadIdx.x == 0)
 #ifndef RX_LEGACY_DISPATCH
-				printf("[F ip=%d fprc=%u cb=%d cf=%d]\n", (int)ip, (unsigned)fprc, (int)cb_word, (int)cf_word);
+				printf("[F ip=%d fprc=%u hdr=%08x]\n", (int)ip, (unsigned)fprc, (unsigned)group_bits);
 #else
 				printf("[F ip=%d fprc=%u]\n", (int)ip, (unsigned)fprc);
 #endif
@@ -2065,7 +2119,10 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 	const uint32_t* compiled_program = (const uint32_t*)(R + (REGISTERS_SIZE + IMM_BUF_SIZE) / sizeof(uint64_t));
 #endif
 #ifndef RX_LEGACY_DISPATCH
-	const uint32_t* rx_group_flags = (const uint32_t*)((const uint8_t*)R + RX_GROUP_FLAGS_OFFSET);
+	// M2c: cb/cf presence moved into the group header word (GROUP_CB_BIT /
+	// GROUP_CF_BIT); the per-word flag region is still emitted by init_vm for
+	// the xlane/scratch milestones but no longer read here.
+	(void) 0;
 #endif
 
 	const uint64_t workers_mask = ((1ull << WORKERS_PER_HASH) - 1) << ((threadIdx.x / IDX_WIDTH) * IDX_WIDTH);
@@ -2117,12 +2174,7 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 		TRACE_VM_STATE("BEFORE_INNER_LOOP", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
 		if ((WORKERS_PER_HASH == IDX_WIDTH) || (sub < WORKERS_PER_HASH))
-			inner_loop<WORKERS_PER_HASH, HIGH_PRECISION>(program_length, compiled_program, sub, scratchpad, fp_reg_offset, fp_reg_group_A_offset, R, imm_buf, batch_size, fprc, xexponentMask, workers_mask, ic
-#ifdef RX_LEGACY_DISPATCH
-				, 0
-#else
-				, rx_group_flags
-#endif
+			inner_loop<WORKERS_PER_HASH, HIGH_PRECISION>(program_length, compiled_program, sub, scratchpad, fp_reg_offset, fp_reg_group_A_offset, R, imm_buf, batch_size, fprc, xexponentMask, workers_mask			, ic
 			);
 
 		TRACE_VM_STATE("AFTER_INNER_LOOP", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
