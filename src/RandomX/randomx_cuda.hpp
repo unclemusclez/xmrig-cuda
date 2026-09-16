@@ -92,19 +92,23 @@ constexpr size_t IMM_INDEX_COUNT = (IMM_BUF_SIZE / 4) - 2;
 // hashes fits exactly 8 blocks per CU in the 64 KB LDS of gfx1100.
 constexpr size_t VM_STATE_SIZE = REGISTERS_SIZE + IMM_BUF_SIZE + RANDOMX_PROGRAM_SIZE * 4;
 #else
-// Group control flags (fast dispatch): 2 bits per compiled program word.
+// Group control flags (fast dispatch): 4 bits per compiled program word.
 // Bit0 = word is a live CBRANCH, bit1 = word is a CFROUND. The inner loop
 // scans the flags of its current worker group and recomputes branch/rounding
 // updates uniformly on all lanes, which removes the per-slot LDS round-trip
-// of ip/fprc through imm_buf. Max words = RANDOMX_PROGRAM_SIZE, so the
-// region is RANDOMX_PROGRAM_SIZE/4 bytes (64 B for Monero).
+// of ip/fprc through imm_buf.
+// Bit2 (xlane) = word is a live ISWAP_R (cross-lane register write); bit3
+// (scratch) = word touches the scratchpad. Reserved by the compiled-plan v2
+// milestones (barrier gating / load pipelining); emitted by init_vm, ignored
+// by execute in this revision. Max words = RANDOMX_PROGRAM_SIZE, so the
+// region is RANDOMX_PROGRAM_SIZE/2 bytes (128 B for Monero).
 //
-// PERF NOTE: the extra 64 B/hash grows the LDS block footprint (8192 B ->
-// 8448 B for 4 hashes on gfx1100) and drops occupancy from 8 to 7 blocks per
-// CU, which costs more than the dispatch saves. Fast dispatch is kept for
+// PERF NOTE: the extra 128 B/hash grows the LDS block footprint (8192 B ->
+// 8704 B for 4 hashes on gfx1100); occupancy stays at 7 blocks per CU
+// (65536/8704 = 7.5), same as the 2-bit layout. Fast dispatch is kept for
 // experimentation only; builds ship with RX_LEGACY_DISPATCH.
 constexpr size_t RX_GROUP_FLAGS_OFFSET = REGISTERS_SIZE + IMM_BUF_SIZE + RANDOMX_PROGRAM_SIZE * 4;
-constexpr size_t RX_GROUP_FLAGS_SIZE = (RANDOMX_PROGRAM_SIZE * 2 + 7) / 8;
+constexpr size_t RX_GROUP_FLAGS_SIZE = (RANDOMX_PROGRAM_SIZE * 4 + 7) / 8;
 
 constexpr size_t VM_STATE_SIZE = RX_GROUP_FLAGS_OFFSET + RX_GROUP_FLAGS_SIZE;
 #endif
@@ -967,9 +971,33 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 			group_flags[gi] = 0;
 #endif
 
-		int32_t branch_target_slot = -1;
-		int32_t k = -1;
-		for (int32_t i = 0; i <= last_used_slot; ++i)
+	int32_t branch_target_slot = -1;
+	int32_t k = -1;
+
+#ifndef RX_LEGACY_DISPATCH
+	// Compiled plan v2 emitter: write one program word and derive its 4 flag
+	// bits from the word itself (opcode/loc/dst/src fields). Centralizing the
+	// flag logic keeps every opcode class consistent. INST_NOP decodes as
+	// opcode 8 (degenerate ISWAP on r0); a live ISWAP_R additionally has
+	// dst != src, which distinguishes it from a NOP word.
+	auto rx_emit_word = [&](uint32_t word) {
+		*(compiled_program++) = word;
+		const uint32_t opc = (word >> OPCODE_OFFSET) & 15;
+		uint32_t f = 0;
+		if (opc == 9) f = 1;
+		else if (opc == 13) f = 2;
+		else if ((opc == 8) && (((word >> DST_OFFSET) ^ (word >> SRC_OFFSET)) & 7)) f = 4;
+		if (word & (1u << LOC_OFFSET)) f |= 8;
+		if (f) group_flags[k >> 3] |= f << ((k & 7) * 4);
+	};
+#endif
+#ifdef RX_LEGACY_DISPATCH
+	auto rx_emit_word = [&](uint32_t word) {
+		*(compiled_program++) = word;
+	};
+#endif
+
+	for (int32_t i = 0; i <= last_used_slot; ++i)
 		{
 			if (!(execution_plan[i] || (i == first_instruction_slot) || ((i == first_instruction_slot + 1) && first_instruction_fp)))
 				continue;
@@ -1022,7 +1050,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 						imm_buf[imm_index++] = inst.y;
 				}
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_IADD_RS;
@@ -1037,7 +1065,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 				else
 					inst.x = INST_NOP;
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_IADD_M;
@@ -1052,7 +1080,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 						imm_buf[imm_index++] = inst.y;
 				}
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_ISUB_R;
@@ -1067,7 +1095,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 				else
 					inst.x = INST_NOP;
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_ISUB_M;
@@ -1082,7 +1110,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 						imm_buf[imm_index++] = inst.y;
 				}
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_IMUL_R;
@@ -1097,7 +1125,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 				else
 					inst.x = INST_NOP;
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_IMUL_M;
@@ -1106,7 +1134,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 			{
 				inst.x = (dst << DST_OFFSET) | (src << SRC_OFFSET) | (6 << OPCODE_OFFSET);
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_IMULH_R;
@@ -1121,7 +1149,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 				else
 					inst.x = INST_NOP;
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_IMULH_M;
@@ -1130,7 +1158,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 			{
 				inst.x = (dst << DST_OFFSET) | (src << SRC_OFFSET) | (4 << OPCODE_OFFSET);
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_ISMULH_R;
@@ -1145,7 +1173,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 				else
 					inst.x = INST_NOP;
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_ISMULH_M;
@@ -1155,7 +1183,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 				const uint64_t r = imul_rcp_value(inst.y);
 				if (r == 1)
 				{
-					*(compiled_program++) = INST_NOP | num_workers;
+					rx_emit_word(INST_NOP | num_workers);
 					continue;
 				}
 
@@ -1169,7 +1197,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 					imm_index += 2;
 				}
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_IMUL_RCP;
@@ -1178,7 +1206,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 			{
 				inst.x = (dst << DST_OFFSET) | (5 << OPCODE_OFFSET);
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_INEG_R;
@@ -1193,7 +1221,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 						imm_buf[imm_index++] = inst.y;
 				}
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_IXOR_R;
@@ -1208,7 +1236,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 				else
 					inst.x = INST_NOP;
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_IXOR_M;
@@ -1225,7 +1253,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 				if (opcode >= RANDOMX_FREQ_IROR_R)
 					inst.x |= (1 << NEGATIVE_SRC_OFFSET);
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_IROR_R + RANDOMX_FREQ_IROL_R;
@@ -1234,7 +1262,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 			{
 				inst.x = (dst << DST_OFFSET) | (src << SRC_OFFSET) | (8 << OPCODE_OFFSET);
 
-				*(compiled_program++) = ((src != dst) ? inst.x : INST_NOP) | num_workers;
+				rx_emit_word(((src != dst) ? inst.x : INST_NOP) | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_ISWAP_R;
@@ -1243,7 +1271,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 			{
 				inst.x = (dst << DST_OFFSET) | (11 << OPCODE_OFFSET);
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_FSWAP_R;
@@ -1252,7 +1280,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 			{
 				inst.x = ((dst % randomx::RegisterCountFlt) << DST_OFFSET) | ((src % randomx::RegisterCountFlt) << (SRC_OFFSET + 1)) | (12 << OPCODE_OFFSET);
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_FADD_R;
@@ -1267,7 +1295,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 				else
 					inst.x = INST_NOP;
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_FADD_M;
@@ -1276,7 +1304,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 			{
 				inst.x = ((dst % randomx::RegisterCountFlt) << DST_OFFSET) | ((src % randomx::RegisterCountFlt) << (SRC_OFFSET + 1)) | (12 << OPCODE_OFFSET) | (1 << NEGATIVE_SRC_OFFSET);
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_FSUB_R;
@@ -1291,7 +1319,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 				else
 					inst.x = INST_NOP;
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_FSUB_M;
@@ -1316,7 +1344,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 					}
 				}
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_FSCAL_R;
@@ -1325,7 +1353,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 			{
 				inst.x = (((dst % randomx::RegisterCountFlt) + randomx::RegisterCountFlt) << DST_OFFSET) | ((src % randomx::RegisterCountFlt) << (SRC_OFFSET + 1)) | (1 << SHIFT_OFFSET) | (12 << OPCODE_OFFSET);
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_FMUL_R;
@@ -1340,7 +1368,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 				else
 					inst.x = INST_NOP;
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_FDIV_M;
@@ -1349,7 +1377,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 			{
 				inst.x = (((dst % randomx::RegisterCountFlt) + randomx::RegisterCountFlt) << DST_OFFSET) | (14 << OPCODE_OFFSET);
 
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_FSQRT_R;
@@ -1376,14 +1404,9 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 					inst.x = INST_NOP;
 				}
 
-				branch_target_slot = -1;
+			branch_target_slot = -1;
 
-#ifndef RX_LEGACY_DISPATCH
-				if (inst.x != INST_NOP)
-					group_flags[k >> 4] |= 1u << ((k & 15) * 2);
-#endif
-
-*(compiled_program++) = inst.x | num_workers;
+			rx_emit_word(inst.x | num_workers);
 			continue;
 		}
 		opcode -= RANDOMX_FREQ_CBRANCH;
@@ -1392,11 +1415,7 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 		{
 			inst.x = (src << SRC_OFFSET) | (13 << OPCODE_OFFSET) | ((inst.y & 63) << IMM_OFFSET);
 
-#ifndef RX_LEGACY_DISPATCH
-			group_flags[k >> 4] |= 2u << ((k & 15) * 2);
-#endif
-
-			*(compiled_program++) = inst.x | num_workers;
+			rx_emit_word(inst.x | num_workers);
 			continue;
 		}
 		opcode -= RANDOMX_FREQ_CFROUND;
@@ -1410,12 +1429,12 @@ __global__ void __launch_bounds__(RX_WAVE_SIZE, RX_WAVE_SIZE == 64 ? 8 : 16) ini
 					imm_buf[imm_index++] = (inst.y & 0xFC1FFFFFU) | (((location == 1) ? LOC_L1 : ((location == 2) ? LOC_L2 : LOC_L3)) << 21);
 				else
 					inst.x = INST_NOP;
-				*(compiled_program++) = inst.x | num_workers;
+				rx_emit_word(inst.x | num_workers);
 				continue;
 			}
 			opcode -= RANDOMX_FREQ_ISTORE;
 
-			*(compiled_program++) = inst.x | num_workers;
+			rx_emit_word(inst.x | num_workers);
 		}
 
 		((uint32_t*)(R + 20))[0] = static_cast<uint32_t>(compiled_program - (uint32_t*)(R + (REGISTERS_SIZE + IMM_BUF_SIZE) / sizeof(uint64_t)));
@@ -1917,7 +1936,7 @@ __device__ void inner_loop(
 			int32_t cf_word = -1;
 			for (int32_t w = ip, w_end = ip + num_insts; w <= w_end; ++w)
 			{
-				const uint32_t f = (group_flags[w >> 4] >> ((w & 15) * 2)) & 3;
+				const uint32_t f = (group_flags[w >> 3] >> ((w & 7) * 4)) & 3;
 				if (f & 1) cb_word = w;
 				if (f & 2) cf_word = w;
 			}

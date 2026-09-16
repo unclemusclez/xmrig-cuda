@@ -61,9 +61,10 @@ int main()
 	const int hashes_per_block = wave / 8;
 	const long long REG_IMM = 256 + 768;            // REGISTERS_SIZE + IMM_BUF_SIZE
 	const long long prog = 1024;                    // compiled program bytes
+	const long long flags = 128;                    // group flags (4 bits/word, Monero)
 	const size_t lds_per_cu = 65536;
 
-	long long state_full = REG_IMM + prog;          // current default layout
+	long long state_full = REG_IMM + prog + flags;  // current default layout
 	long long state_pig  = REG_IMM;                 // program-in-global layout
 	auto cap = [&](long long bytes_per_hash, int max_waves_per_cu) {
 		long long blocks_by_lds = (long long)lds_per_cu / (bytes_per_hash * hashes_per_block);
