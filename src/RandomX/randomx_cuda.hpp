@@ -135,15 +135,22 @@ constexpr size_t VM_STATE_SIZE = RX_GROUP_FLAGS_OFFSET + RX_GROUP_FLAGS_SIZE;
 // wave64 hardware. batch_size must be a multiple of this value.
 constexpr int RX_VM_HASHES_PER_BLOCK = RX_WAVE_SIZE / 8;
 
-// execute_vm occupancy target (blocks per CU). With RX_PROGRAM_IN_GLOBAL the
-// per-block LDS footprint halves, so wave64 targets can hold 8 blocks/CU
-// instead of 4.
+// execute_vm occupancy hint (blocks per CU) for __launch_bounds__. Must state
+// the TRUE LDS-limited residency: an inflated hint makes the compiler squeeze
+// VGPRs for occupancy the launch can never achieve (pointless spills).
+// Staged bytes/block = RX_VM_HASHES_PER_BLOCK * STAGED_SIZE, STAGED_SIZE =
+// 2048 B with RX_PROGRAM_IN_GLOBAL (program served from global/L2) else the
+// full 4096 B VM state. gfx906/gfx1100 both have 64 KB LDS per CU.
 #ifdef RX_PROGRAM_IN_GLOBAL
-constexpr int RX_VM_BLOCKS_PER_CU = 8;
-#elif RX_WAVE_SIZE == 64
-constexpr int RX_VM_BLOCKS_PER_CU = 4;
+#if RX_WAVE_SIZE == 64
+constexpr int RX_VM_BLOCKS_PER_CU = 4;  // 8 hashes x 2048 B = 16 KB -> exactly 4
 #else
-constexpr int RX_VM_BLOCKS_PER_CU = 8;
+constexpr int RX_VM_BLOCKS_PER_CU = 8;  // 4 hashes x 2048 B = 8 KB -> 8
+#endif
+#elif RX_WAVE_SIZE == 64
+constexpr int RX_VM_BLOCKS_PER_CU = 2;  // 8 hashes x 4096 B = 32 KB -> 2
+#else
+constexpr int RX_VM_BLOCKS_PER_CU = 4;  // 4 hashes x 4096 B = 16 KB -> 4
 #endif
 
 constexpr uint32_t CacheLineSize = 64;
@@ -1705,6 +1712,15 @@ template<> __device__ double sqrt_rnd<3, true>(double a, uint32_t) { return rx_d
 
 #define ROUNDING_MODE (RANDOMX_FREQ_CFROUND ? -1 : 0)
 
+#ifdef RX_M3_PROMOTE
+__device__ __forceinline__ uint64_t rx_shfl_u64(uint64_t val, int srcLane)
+{
+	uint32_t lo = __shfl_sync(0xFFFFFFFFull, (uint32_t)val, srcLane);
+	uint32_t hi = __shfl_sync(0xFFFFFFFFull, (uint32_t)(val >> 32), srcLane);
+	return ((uint64_t)hi << 32) | lo;
+}
+#endif
+
 // Wave-wide memory convergence for AMD GCN/RDNA. Waits until every outstanding
 // vector/LDS memory operation of the whole wave (all lanes) has completed, so
 // values stored by one lane become visible to loads issued by the other lanes
@@ -1714,6 +1730,13 @@ __device__ __forceinline__ void rx_wave_sync()
 {
 #if defined(__HIP_DEVICE_COMPILE__)
 	asm volatile("s_waitcnt vmcnt(0) lgkmcnt(0)" ::: "memory");
+#endif
+}
+
+__device__ __forceinline__ void rx_wave_sync_lds_only()
+{
+#if defined(__HIP_DEVICE_COMPILE__)
+	asm volatile("s_waitcnt lgkmcnt(0)" ::: "memory");
 #endif
 }
 
@@ -1771,6 +1794,12 @@ __device__ void inner_loop(
 	const uint64_t xexponentMask,
 	const uint64_t workers_mask,
 	const int32_t trace_ic
+#ifdef RX_M3_PROMOTE
+	,uint64_t& v_r
+#ifdef RX_M3_PROMOTE_FE
+	,uint64_t v_fe[4]
+#endif
+#endif
 )
 {
 	const int32_t sub2 = sub >> 1;
@@ -1794,6 +1823,15 @@ __device__ void inner_loop(
 		const int32_t num_insts = num_workers - num_fp_insts;
 		const uint32_t group_bits = inst & (GROUP_CB_BIT | GROUP_CF_BIT);
 
+		// Per-lane scratch participation: only lanes whose instruction touched
+		// the scratchpad (M-variants, ISTORE) need the full vmcnt drain at the
+		// slot boundary; their stores must retire before any lane's loads in
+		// later groups. Lanes without outstanding global stores only need LDS
+		// convergence (lgkmcnt). Lockstep execution guarantees ordering: every
+		// storing lane drains at THIS slot's end, so by the next slot all
+		// cross-lane global writes are visible through the write-through L1.
+		bool my_loc = false;
+
 		if (sub <= num_workers)
 		{
 			const int32_t inst_offset = sub - num_fp_insts;
@@ -1802,6 +1840,7 @@ __device__ void inner_loop(
 
 			uint32_t opcode = (inst >> OPCODE_OFFSET) & 15;
 			const uint32_t location = (inst >> LOC_OFFSET) & 1;
+			my_loc = (location != 0);
 
 			const uint32_t reg_size_shift = is_fp ? 4 : 3;
 			const uint32_t reg_base_offset = is_fp ? fp_reg_offset : 0;
@@ -1820,14 +1859,45 @@ __device__ void inner_loop(
 			if ((opcode == 8) && (dst_offset == src_offset))
 				goto execution_end;
 
+#ifdef RX_M3_PROMOTE
+			const bool dst_is_mine_int = (!is_fp) && (dst_offset == (uint32_t)(sub << 3));
+#ifdef RX_M3_PROMOTE_FE
+			const bool dst_is_mine_fp = is_fp && ((dst_offset >> 4) < 4);
+			const uint32_t fe_idx = dst_offset >> 4;
+#endif
+			const int32_t hash_base = threadIdx.x & ~(WORKERS_PER_HASH - 1);
+#endif
+
 			uint64_t* dst_ptr = (uint64_t*)((uint8_t*)(R) + dst_offset);
 			uint64_t* src_ptr = (uint64_t*)((uint8_t*)(R) + src_offset);
 
 			const uint32_t imm_offset = (inst >> IMM_OFFSET) & 255;
 			const uint32_t* imm_ptr = imm_buf + imm_offset;
 
+#ifdef RX_M3_PROMOTE
+			uint64_t dst = dst_is_mine_int ? v_r : 
+#ifdef RX_M3_PROMOTE_FE
+				(dst_is_mine_fp ? v_fe[fe_idx] : 
+#endif
+				*dst_ptr
+#ifdef RX_M3_PROMOTE_FE
+				)
+#endif
+				;
+			uint64_t src;
+			if (!is_fp && !location && !(inst & (1 << SRC_IS_IMM32_OFFSET)) && !(inst & (1 << SRC_IS_IMM64_OFFSET)))
+			{
+				const int32_t src_lane = hash_base + (int32_t)(src_offset >> 3);
+				src = rx_shfl_u64(v_r, src_lane);
+			}
+			else
+			{
+				src = *src_ptr;
+			}
+#else
 			uint64_t dst = *dst_ptr;
 			uint64_t src = *src_ptr;
+#endif
 			uint2 imm;
 			imm.x = imm_ptr[0];
 			imm.y = imm_ptr[1];
@@ -1938,7 +2008,8 @@ __device__ void inner_loop(
 				}
 				else if (opcode == 8)
 				{
-					// ISWAP_R
+					// ISWAP_R — cross-lane swap must go through LDS even with
+					// M3 promotion; shfl cannot write to another lane's VGPR.
 					*src_ptr = dst;
 					dst = src;
 				}
@@ -1968,14 +2039,31 @@ __device__ void inner_loop(
 					goto execution_end;
 				}
 
+#ifdef RX_M3_PROMOTE
+				if (dst_is_mine_int)
+					v_r = dst;
+#ifdef RX_M3_PROMOTE_FE
+				else if (dst_is_mine_fp)
+					v_fe[fe_idx] = dst;
+#endif
+				else
+#endif
 				*dst_ptr = dst;
 			}
 		}
 
 		execution_end:
 		{
-			// Make every lane's register/scratchpad stores of this slot visible.
-			rx_wave_sync();
+#ifdef RX_M3_PROMOTE
+			R[sub] = v_r;
+#endif
+			if (my_loc)
+				rx_wave_sync();
+			else
+				rx_wave_sync_lds_only();
+#ifdef RX_M3_PROMOTE
+			v_r = R[sub];
+#endif
 
 #ifdef RX_LEGACY_DISPATCH
 			// Synchronize the instruction pointer and the rounding mode across all
@@ -2129,6 +2217,18 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 
 	TRACE_VM_STATE("ENTER", 0, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
+#ifdef RX_M3_PROMOTE
+	uint64_t v_r = R[sub];
+#ifdef RX_M3_PROMOTE_FE
+	uint64_t v_fe[4];
+	{
+		const uint32_t fe_base = 64 + ((sub & 1) << 3);
+		for (int k = 0; k < 4; k++)
+			v_fe[k] = *(uint64_t*)((uint8_t*)R + fe_base + k * 16);
+	}
+#endif
+#endif
+
 	#pragma unroll(1)
 	for (int ic = 0; ic < num_iterations; ++ic)
 	{
@@ -2136,17 +2236,8 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 		uint64_t dataset_line = 0;
 		if ((WORKERS_PER_HASH <= 8) || (sub < 8))
 		{
-			// Issue this iteration's dataset line load up front. The read uses
-			// `ma`, which inner_loop cannot modify (dataset is read-only and
-			// ma/mx only swap at the end of the iteration), but the compiler
-			// cannot prove that across the scratchpad writes inside inner_loop,
-			// so without this hoist the ~300-500 ns global latency stalls the
-			// wave right after the inner loop. Hoisted, it overlaps the whole
-			// inner-loop body.
 			dataset_line = *(const uint64_t*)(dataset + ma + sub * 8);
 
-			// Make the previous iteration's stores (other lanes' registers,
-			// scratchpad and imm_buf updates) visible before reading them.
 			rx_wave_sync();
 
 			const uint64_t spMix = *readReg0 ^ *readReg1;
@@ -2161,7 +2252,11 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 			p1 = (uint64_t*)(scratchpad + spAddr1 + sub * 8);
 
 			r = R + sub;
+#ifdef RX_M3_PROMOTE
+			v_r ^= *p0;
+#else
 			*r ^= *p0;
+#endif
 
 			uint64_t global_mem_data = *p1;
 			int32_t* q = (int32_t*)&global_mem_data;
@@ -2175,23 +2270,47 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 
 		if ((WORKERS_PER_HASH == IDX_WIDTH) || (sub < WORKERS_PER_HASH))
 			inner_loop<WORKERS_PER_HASH, HIGH_PRECISION>(program_length, compiled_program, sub, scratchpad, fp_reg_offset, fp_reg_group_A_offset, R, imm_buf, batch_size, fprc, xexponentMask, workers_mask			, ic
+#ifdef RX_M3_PROMOTE
+				, v_r
+#ifdef RX_M3_PROMOTE_FE
+				, v_fe
+#endif
+#endif
 			);
 
 		TRACE_VM_STATE("AFTER_INNER_LOOP", ic, sub, R, fprc, ma, mx, spAddr0, spAddr1);
 
 		if ((WORKERS_PER_HASH <= 8) || (sub < 8))
 		{
-			// All lanes wrote their registers during inner_loop; wait wave-wide
-			// before cross-lane reads of readReg2/readReg3 below.
+#ifdef RX_M3_PROMOTE
+			R[sub] = v_r;
+#ifdef RX_M3_PROMOTE_FE
+			{
+				const uint32_t fe_base = 64 + ((sub & 1) << 3);
+				for (int k = 0; k < 4; k++)
+					*(uint64_t*)((uint8_t*)R + fe_base + k * 16) = v_fe[k];
+			}
+#endif
+#endif
 			rx_wave_sync();
 
 			mx ^= *readReg2 ^ *readReg3;
 			mx &= CacheLineAlignMask;
 
+#ifdef RX_M3_PROMOTE
+			v_r ^= dataset_line;
+			R[sub] = v_r;
+#else
 			const uint64_t next_r = *r ^ dataset_line;
 			*r = next_r;
+#endif
 
-			*p1 = next_r;
+			*p1 = 
+#ifdef RX_M3_PROMOTE
+				v_r;
+#else
+				next_r;
+#endif
 			*p0 = bit_cast<uint64_t>(f[0]) ^ bit_cast<uint64_t>(e[0]);
 
 			uint32_t tmp = ma;
@@ -2209,13 +2328,23 @@ __device__ void execute_vm_impl(void* vm_states, void* rounding, void* scratchpa
 
 	// Drain wave-wide LDS stores so the writeback reads the final register
 	// file of all lanes (F[sub]/E[sub] may have been written by other lanes).
+#ifdef RX_M3_PROMOTE
+	R[sub] = v_r;
+#endif
 	rx_wave_sync();
+#ifdef RX_M3_PROMOTE
+	v_r = R[sub];
+#endif
 
 	if ((WORKERS_PER_HASH > 8) && (sub >= 8))
 		return;
 
 	uint64_t* p = ((uint64_t*) vm_states) + idx * (VM_STATE_SIZE / sizeof(uint64_t));
+#ifdef RX_M3_PROMOTE
+	p[sub] = v_r;
+#else
 	p[sub] = R[sub];
+#endif
 
 	if (sub == 0)
 		((uint32_t*) rounding)[idx] = fprc;

@@ -32,6 +32,10 @@ option(WITH_RX_LEGACY_DISPATCH "Use legacy LDS dispatch for RandomX ip/fprc" ON)
 # footprint, doubling blocks/CU on wave64 targets (gfx906: 4 -> 8).
 option(WITH_RX_PROGRAM_IN_GLOBAL "Keep RandomX compiled program in global cache instead of LDS" OFF)
 
+# M3 register promotion: promote R[sub] to VGPR, cross-lane src via shfl.
+option(WITH_RX_M3_PROMOTE "M3: promote integer register to VGPR with shfl cross-lane" OFF)
+option(WITH_RX_M3_PROMOTE_FE "M3b: also promote F/E registers to VGPRs" OFF)
+
 # RandomX wavefront size: gfx6xx-gfx9xx execute wave64, gfx10+ execute wave32.
 # The RandomX VM kernels launch one wavefront per block (RX_WAVE_SIZE threads),
 # and host-side launch geometry must match the device, so this is passed as a
@@ -101,11 +105,15 @@ set_source_files_properties(
 )
 
 if (XMRIG_OS_WIN)
-    if (NOT DEFINED ENV{WindowsSdkDir})
+    if (NOT DEFINED ENV{WindowsSdkDir} OR "$ENV{WindowsSdkDir}" STREQUAL "")
         set(WindowsSdkDir "C:/Program Files (x86)/Windows Kits/10" CACHE PATH "Fallback Windows SDK root")
+    else()
+        set(WindowsSdkDir "$ENV{WindowsSdkDir}" CACHE PATH "Windows SDK root" FORCE)
     endif()
-    if (NOT DEFINED ENV{WindowsSDKVersion})
-        set(WindowsSDKVersion "10.0.26100.0" CACHE STRING "Fallback Windows SDK version")
+    if (NOT DEFINED ENV{WindowsSDKVersion} OR "$ENV{WindowsSDKVersion}" STREQUAL "")
+        set(WindowsSDKVersion "10.0.26100.0" CACHE STRING "Fallback Windows SDK version" FORCE)
+    else()
+        set(WindowsSDKVersion "$ENV{WindowsSDKVersion}" CACHE STRING "Windows SDK version" FORCE)
     endif()
     set(RC_COMPILER "C:/Program Files (x86)/Windows Kits/10/bin/${WindowsSDKVersion}/x64/rc.exe")
     set(RC_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/app.res)
@@ -140,16 +148,15 @@ set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
 )
 
 if (WIN32)
-    # RDNA3 (gfx1100) natively executes wave32. The RandomX kernels follow
-    # RX_WAVE_SIZE for their geometry (block threads, hashes/block,
-    # launch_dims); the codegen wave size MUST agree with it. A mismatch
-    # (RX_WAVE_SIZE=64 compiled as wave32) runs 64-thread blocks as two
-    # wave32 halves and cripples fast-dispatch builds by ~40%.
-    if (RX_WAVE_SIZE EQUAL 64)
-        target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE --offload-arch=gfx1100 -mwavefrontsize64 -O3)
-    else()
-        target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE --offload-arch=gfx1100 -mno-wavefrontsize64 -O3)
-    endif()
+    # Windows target is gfx1100 (RDNA3, native wave32). LAYOUT and CODEGEN wave
+    # size are independent: RX_WAVE_SIZE controls kernel geometry (threads/block,
+    # hashes/block, LDS staging) while codegen must stay wave32 -- RX_WAVE_SIZE=64
+    # layouts run as 64-thread blocks of two wave32 halves and that is the
+    # winning geometry (8 hashes/block x 2048 B = exactly 4 blocks/CU).
+    # Compiling wave64 codegen on RDNA3 halves SIMD throughput (v0.0.5-era
+    # experiments: coherent wave64 measured slower in every configuration).
+    # Linux (gfx906) never enters this block; hipcc emits native wave64 there.
+    target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE --offload-arch=gfx1100 -mno-wavefrontsize64 -O3)
     set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} --rocm-path=C:/ROCm72")
 endif()
 
@@ -177,6 +184,12 @@ if (WITH_RANDOMX)
     endif()
     if (WITH_RX_PROGRAM_IN_GLOBAL)
         target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE RX_PROGRAM_IN_GLOBAL)
+    endif()
+    if (WITH_RX_M3_PROMOTE)
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE RX_M3_PROMOTE)
+    endif()
+    if (WITH_RX_M3_PROMOTE_FE)
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE RX_M3_PROMOTE_FE)
     endif()
 endif()
 
